@@ -79,7 +79,7 @@ function providerHint(provider: string) {
   if (provider === "cloudflare") {
     return (
       <p className="text-[11px] leading-relaxed text-white/50">
-        صيغة مفتاح Cloudflare: <code dir="ltr" className="font-mono text-white/70">ACCOUNT_ID:API_TOKEN</code> — مفصولين بنقطتين، ويُخزّنان معًا في قاعدة البيانات ويُفصلان تلقائيًا عند التوليد.
+        صيغتا مفتاح Cloudflare (مفصولة بنقطتين): <code dir="ltr" className="font-mono text-white/70">ACCOUNT_ID:API_TOKEN</code> للتوكن أو <code dir="ltr" className="font-mono text-white/70">ACCOUNT_ID:EMAIL:GLOBAL_API_KEY</code> لمفتاح API العام — يُخزَّن كما هو ويُفصل تلقائيًا عند التوليد (Bearer أو X-Auth-Email/X-Auth-Key).
       </p>
     );
   }
@@ -94,7 +94,7 @@ function providerHint(provider: string) {
 }
 
 function keyInputPlaceholder(provider: string): string {
-  if (provider === "cloudflare") return "ACCOUNT_ID:API_TOKEN";
+  if (provider === "cloudflare") return "ACCOUNT_ID:API_TOKEN أو ACCOUNT_ID:EMAIL:GLOBAL_API_KEY";
   if (provider === "pollinations") return "اكتب free (بلا مفتاح حقيقي)";
   return "ألصق مفتاح API هنا";
 }

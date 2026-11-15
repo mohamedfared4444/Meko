@@ -57,17 +57,27 @@ export async function POST(req: Request) {
     );
   }
 
-  // مفتاح Cloudflare بصيغة ACCOUNT_ID:API_TOKEN — يُفصلان عند نقطتين ويُطهَّران
+  // مفتاح Cloudflare بصيغتين: ACCOUNT_ID:API_TOKEN أو ACCOUNT_ID:EMAIL:GLOBAL_API_KEY — يُفصلان عند نقطتين ويُطهَّران
   let normalizedKey = apiKey;
   if (provider === "cloudflare") {
-    const parts = apiKey.split(":");
-    if (parts.length !== 2 || parts[0].trim().length < 4 || parts[1].trim().length < 4) {
+    const parts = apiKey.split(":").map((p) => p.trim()).filter((p) => p.length > 0);
+    const valid2 = parts.length === 2 && parts[0].length >= 4 && parts[1].length >= 4;
+    const valid3 =
+      parts.length === 3 &&
+      parts[0].length >= 4 &&
+      parts[1].includes("@") &&
+      parts[1].length >= 6 &&
+      parts[2].length >= 4;
+    if (!valid2 && !valid3) {
       return NextResponse.json(
-        { error: "مفتاح Cloudflare يجب أن يكون بصيغة ACCOUNT_ID:API_TOKEN — معرّف الحساب والتوكن مفصولين بنقطتين." },
+        {
+          error:
+            "مفتاح Cloudflare يجب أن يكون بصيغة ACCOUNT_ID:API_TOKEN (توكن Bearer) أو ACCOUNT_ID:EMAIL:GLOBAL_API_KEY (مفتاح API العام) — مفصولة بنقطتين، والبريد يجب أن يحتوي @.",
+        },
         { status: 400 },
       );
     }
-    normalizedKey = `${parts[0].trim()}:${parts[1].trim()}`;
+    normalizedKey = parts.join(":");
   }
 
   // Pollinations مجاني بلا مفتاح حقيقي — يقبل أي نص تعريفي مثل «free»

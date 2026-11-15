@@ -3,12 +3,14 @@ import { ProviderHttpError, type ProviderAdapter } from "./types-adapter";
 /**
  * مزود Cloudflare Workers AI — مزود الصور المجاني الأول بالترتيب (نقاط يومية مجانية):
  *
- * صيغة المفتاح المخزن في قاعدة البيانات:  ACCOUNT_ID:API_TOKEN
- * (يُفصلان عند أول نقطتين ":" لاستخراج accountId و apiToken)
+ * صيغتا المفتاح المخزن في قاعدة البيانات:
+ *  1) ACCOUNT_ID:API_TOKEN            ← مصادقة توكن API (Bearer Token)
+ *  2) ACCOUNT_ID:EMAIL:GLOBAL_API_KEY ← مصادقة مفتاح API العام القديم (Global API Key)
  *
  * النداء:
  *   POST https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/black-forest-labs/flux-1-schnell
- *     Authorization: Bearer ${apiToken}
+ *     الصيغة 1: Authorization: Bearer ${apiToken}
+ *     الصيغة 2: X-Auth-Email: ${email} + X-Auth-Key: ${globalApiKey} (بلا Authorization)
  *     Content-Type: application/json
  *     {"prompt": prompt}
  *
@@ -25,23 +27,70 @@ import { ProviderHttpError, type ProviderAdapter } from "./types-adapter";
 const CF_BASE = "https://api.cloudflare.com/client/v4";
 const FLUX_MODEL_DEFAULT = "@cf/black-forest-labs/flux-1-schnell";
 
+/** نوع المصادقة: توكن Bearer أو مفتاح API العام القديم (X-Auth-Email / X-Auth-Key) */
+type CloudflareAuth =
+  | { kind: "bearer"; apiToken: string }
+  | { kind: "globalKey"; email: string; globalApiKey: string };
+
 export interface CloudflareCreds {
   accountId: string;
-  apiToken: string;
+  auth: CloudflareAuth;
 }
 
-/** فصل مفتاح Cloudflare بصيغة ACCOUNT_ID:API_TOKEN عند أول نقطتين */
+/**
+ * فصل مفتاح Cloudflare بصيغتيه المقبولتين:
+ *  - ACCOUNT_ID:API_TOKEN (جزآن) → مصادقة Bearer
+ *  - ACCOUNT_ID:EMAIL:GLOBAL_API_KEY (ثلاثة أجزاء) → مصادقة مفتاح API العام
+ * الأجزاء تُطهَّر من الفراغات، والبريد يجب أن يحتوي @ في الصيغة الثلاثية.
+ */
 export function parseCloudflareKey(rawKey: string): CloudflareCreds {
-  const idx = rawKey.indexOf(":");
-  if (idx <= 0 || idx === rawKey.length - 1) {
-    throw new ProviderHttpError("مفتاح Cloudflare تالف — الصيغة المطلوبة ACCOUNT_ID:API_TOKEN مفصولين بنقطتين", 400);
+  const parts = rawKey.trim().split(":").map((p) => p.trim()).filter((p) => p.length > 0);
+  if (parts.length < 2) {
+    throw new ProviderHttpError(
+      "مفتاح Cloudflare تالف — الصيغ المطلوبة: ACCOUNT_ID:API_TOKEN أو ACCOUNT_ID:EMAIL:GLOBAL_API_KEY (مفصولة بنقطتين)",
+      400,
+    );
   }
-  const accountId = rawKey.slice(0, idx).trim();
-  const apiToken = rawKey.slice(idx + 1).trim();
-  if (accountId.length < 4 || apiToken.length < 4) {
-    throw new ProviderHttpError("مفتاح Cloudflare تالف — معرّف الحساب أو التوكن فارغ/قصير جدًا", 400);
+  const accountId = parts[0];
+  if (accountId.length < 4) {
+    throw new ProviderHttpError("مفتاح Cloudflare تالف — معرّف الحساب (ACCOUNT_ID) فارغ/قصير جدًا", 400);
   }
-  return { accountId, apiToken };
+
+  if (parts.length === 2) {
+    const apiToken = parts[1];
+    if (apiToken.length < 4) {
+      throw new ProviderHttpError("مفتاح Cloudflare تالف — التوكن (API_TOKEN) فارغ/قصير جدًا", 400);
+    }
+    return { accountId, auth: { kind: "bearer", apiToken } };
+  }
+
+  if (parts.length === 3) {
+    const email = parts[1];
+    const globalApiKey = parts[2];
+    if (!email.includes("@") || email.length < 6) {
+      throw new ProviderHttpError("مفتاح Cloudflare تالف — الجزء الثاني في الصيغة الثلاثية يجب أن يكون بريد الحساب (EMAIL) صحيحًا", 400);
+    }
+    if (globalApiKey.length < 4) {
+      throw new ProviderHttpError("مفتاح Cloudflare تالف — مفتاح API العام (GLOBAL_API_KEY) فارغ/قصير جدًا", 400);
+    }
+    return { accountId, auth: { kind: "globalKey", email, globalApiKey } };
+  }
+
+  throw new ProviderHttpError(
+    `مفتاح Cloudflare تالف — عدد الأجزاء ${parts.length} غير معروف. الصيغ المقبولة: ACCOUNT_ID:API_TOKEN أو ACCOUNT_ID:EMAIL:GLOBAL_API_KEY`,
+    400,
+  );
+}
+
+/** بناء هيدرات المصادقة حسب نوع المفتاح — Bearer أو X-Auth-Email/X-Auth-Key */
+function cloudflareAuthHeaders(creds: CloudflareCreds): Record<string, string> {
+  if (creds.auth.kind === "bearer") {
+    return { Authorization: `Bearer ${creds.auth.apiToken}` };
+  }
+  return {
+    "X-Auth-Email": creds.auth.email,
+    "X-Auth-Key": creds.auth.globalApiKey,
+  };
 }
 
 /** تخمين نوع الصورة من البايتات الأولى (magic bytes) — null إن لم تكن صورة معروفة */
@@ -145,21 +194,21 @@ async function uploadImage(bytes: Uint8Array, contentType: string): Promise<stri
 export const cloudflareAdapter: ProviderAdapter = {
   // توليد صورة متزامن — يعيد رابطًا مباشرًا بعد الرفع
   async createImageSync(rawKey, providerModel, input) {
-    const { accountId, apiToken } = parseCloudflareKey(rawKey);
+    const creds = parseCloudflareKey(rawKey);
     const model = providerModel || FLUX_MODEL_DEFAULT;
     const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
     if (!prompt) {
       throw new ProviderHttpError("الوصف (prompt) مطلوب لمزود Cloudflare Workers AI", 400);
     }
 
-    // 1) نداء التوليد
+    // 1) نداء التوليد — الهيدرات حسب نوع المفتاح: Bearer أو X-Auth-Email/X-Auth-Key
     const genTimer = withTimeout(90_000);
     let res: Response;
     try {
-      res = await fetch(`${CF_BASE}/accounts/${encodeURIComponent(accountId)}/ai/run/${model}`, {
+      res = await fetch(`${CF_BASE}/accounts/${encodeURIComponent(creds.accountId)}/ai/run/${model}`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${apiToken}`,
+          ...cloudflareAuthHeaders(creds),
           "Content-Type": "application/json",
           Accept: "application/json, image/*",
         },
