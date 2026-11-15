@@ -416,6 +416,30 @@ export async function listApiKeys(): Promise<ApiKeyRow[]> {
   return r.rows.map((row) => rowToKey(row as unknown as Record<string, unknown>));
 }
 
+/**
+ * ملخص المفاتيح المعطلة لكل مزود — يُستخدم لتفسير سبب تخطي مزود كان مُدرجًا
+ * في أولوية الموديل لكن لا توجد له مفاتيح نشطة في المجمع (شفافية التبديل).
+ */
+export async function disabledKeySummaries(
+  providers: ProviderId[],
+): Promise<Array<{ provider: ProviderId; count: number; lastError: string | null }>> {
+  await ensureSchema();
+  if (providers.length === 0) return [];
+  const placeholders = providers.map(() => "?").join(",");
+  const r = await getTurso().execute({
+    sql: `SELECT provider, COUNT(*) AS n, MAX(last_error) AS last_error
+          FROM api_keys
+          WHERE status = 'disabled' AND provider IN (${placeholders})
+          GROUP BY provider`,
+    args: providers,
+  });
+  return r.rows.map((row) => ({
+    provider: row.provider as ProviderId,
+    count: Number(row.n ?? 0),
+    lastError: row.last_error ? String(row.last_error).slice(0, 120) : null,
+  }));
+}
+
 export async function findDuplicateKey(provider: string, apiKey: string): Promise<ApiKeyRow | null> {
   await ensureSchema();
   const r = await getTurso().execute({

@@ -4,7 +4,7 @@ import { mergerBase, mergerConfigured, mergerCreateJob, mergerGetJob, mergerProc
 import { findModel } from "./models";
 import { getAdapter } from "./providers/registry";
 import type { ApiKeyRow, AttemptRecord, MediaType, ModelDef, ProviderId, TaskRow, TaskStatus } from "./types";
-import { getApiKey, getKeyPool, getTask, insertTask, listRecentTasks, recordKeyUsage, updateTask } from "./turso";
+import { getApiKey, disabledKeySummaries, getKeyPool, getTask, insertTask, listRecentTasks, recordKeyUsage, updateTask } from "./turso";
 import type { ProviderCheckResult } from "./providers/types-adapter";
 
 /**
@@ -126,9 +126,9 @@ async function buildTaskIdMap(ids: string[]): Promise<Map<string, string>> {
 export function formatCompleted(task: TaskRow): string {
   const urls = resultUrls(task);
   const via = task.provider
-    ? `\n\nالمنفّذ: ${providerDisplayName(task.provider)}${task.key_id ? " (مفتاح نشط من قاعدة البيانات)" : ""}`
+    ? `\n\nالمنفّذ: ${providerDisplayName(task.provider)}`
     : "";
-  const note = fallbackNote(task);
+  const note = [fallbackNote(task), skippedNoteFromParams(task)].filter(Boolean).join("\n\n");
   if (task.type === "image") {
     const first = urls[0] ?? "";
     return `✅ تم توليد الصورة بنجاح\n\n![image](${first})\n\nالرابط المباشر: ${first}${via}${note}`;
@@ -172,6 +172,36 @@ function fallbackNote(task: TaskRow): string {
     if (failedFree.length === 0 || !succeeded || succeeded.provider === "cloudflare") return "";
     const reasons = [...new Set(failedFree.map((a) => (a.error || "سبب غير معروف").slice(0, 100)))].join("؛ ");
     return `\n\nℹ️ ملاحظة: نُفّذ عبر ${providerDisplayName(succeeded.provider)} لأن مفتاح/مفاتيح Cloudflare فشلت قبل ذلك (${reasons}). إن كانت التوكنات صالحة فأعد تفعيلها من لوحة الإدارة؛ وإلا أنشئ توكن Workers AI جديد من لوحة Cloudflare وأضفه بصيغة ACCOUNT_ID:API_TOKEN.`;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * ملاحظة محسوبة عند الإنشاء: مزود مُدرج في أولوية الموديل لكن كل مفاتيحه
+ * معطلة في قاعدة البيانات → يُتخطى بصمت من المجمع. نخزن السبب في المهمة
+ * ليعرضه formatCompleted ويبقى ظاهرًا حتى عند التتبع لاحقًا بـ get_task.
+ */
+async function skippedProvidersNote(model: ModelDef, candidates: ApiKeyRow[]): Promise<string> {
+  try {
+    const missing = model.providers.filter((p) => !candidates.some((k) => k.provider === p));
+    if (missing.length === 0) return "";
+    const summaries = await disabledKeySummaries(missing);
+    const parts = summaries.map(
+      (s) => `${providerDisplayName(s.provider)}: ${s.count} مفتاح معطل${s.lastError ? ` — آخر خطأ: «${s.lastError}»` : ""}`,
+    );
+    if (parts.length === 0) return "";
+    return `⚠️ تم تخطي المزودات التالية لأن مفاتيحها معطلة حاليًا ولم تُجرَّب: ${parts.join("؛ ")}. أعد تفعيلها من لوحة الإدارة إن كانت صالحة، وسيُستخدم المزود التالي بالترتيب.`;
+  } catch {
+    return "";
+  }
+}
+
+/** ملاحظة المزودات المتخطاة المخزنة في params_json عند إنشاء المهمة */
+function skippedNoteFromParams(task: TaskRow): string {
+  try {
+    const p = JSON.parse(task.params_json || "{}") as { skippedNote?: string };
+    return typeof p.skippedNote === "string" ? p.skippedNote : "";
   } catch {
     return "";
   }
@@ -419,11 +449,15 @@ export async function runGeneration(opts: {
     };
   }
 
-  // 2) مجمع المفاتيح بترتيب أولوية المزودات — فارغ → رد no_keys
+  // 2) مجمع المفاتيح بترتيب أولوية المزودات — فارغ → رد no_keys (مع سبب تخطي المعطل)
   const candidates = await candidatePool(model, preferred);
+  const skippedNote = await skippedProvidersNote(model, candidates);
   if (candidates.length === 0) {
     const wanted = preferred !== "auto" ? preferred : model.providers.join("، ");
-    return { kind: "invalid", text: `❌ لا توجد مفاتيح نشطة لخدمة ${model.canonical} (المزودات: ${wanted}). أضف مفتاحًا واحدًا على الأقل من واجهة الإدارة، ثم أعد المحاولة.` };
+    return {
+      kind: "invalid",
+      text: `❌ لا توجد مفاتيح نشطة لخدمة ${model.canonical} (المزودات: ${wanted}). أضف مفتاحًا واحدًا على الأقل من واجهة الإدارة، ثم أعد المحاولة.${skippedNote ? `\n\n${skippedNote}` : ""}`,
+    };
   }
 
   const taskId = randomUUID();
@@ -432,6 +466,7 @@ export async function runGeneration(opts: {
     waitSeconds: opts.waitSeconds,
     nextAttemptAt: 0,
     preferredProvider: preferred,
+    skippedNote,
   };
 
   // 3) تسجيل المهمة في Turso قبل أي نداء خارجي
