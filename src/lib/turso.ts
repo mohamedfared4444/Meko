@@ -4,7 +4,7 @@
 // وقت التشغيل على serverless. الاستيراد المباشر للملف يجبر المُجمّع على تضمين السلسلة كاملة
 // داخل حزمة الدالة — بلا قراءة node_modules وقت التشغيل نهائيًا.
 import { createClient, type Client, type InValue } from "../../node_modules/@libsql/client/lib-esm/web.js";
-import { maskEnvValue, normalizeTursoUrl, sanitizeEnvValue } from "@/lib/env";
+import { maskEnvValue, normalizeTursoUrl, sanitizeApiKey, sanitizeEnvValue } from "@/lib/env";
 import { seedDefaultKeys } from "./seed";
 import type { ApiKeyRow, AttemptRecord, MediaType, ProviderId, TaskRow, TaskStatus } from "./types";
 
@@ -210,7 +210,9 @@ function rowToKey(r: Record<string, unknown>): ApiKeyRow {
     id: String(r.id),
     provider: r.provider as ProviderId,
     label: (r.label as string) ?? "",
-    api_key: String(r.api_key),
+    // تعقيم دفاعي عند القراءة: مفاتيح ملصوقة من محادثات عربية قد تحمل أحرفًا
+    // خفية تفشل ترويسات HTTP بـ ByteString — تُنقّى هنا فتصل نظيفة لكل مستهلك
+    api_key: sanitizeApiKey(String(r.api_key)),
     status: (r.status as ApiKeyRow["status"]) ?? "active",
     usage_count: Number(r.usage_count ?? 0),
     success_count: Number(r.success_count ?? 0),
@@ -444,7 +446,7 @@ export async function findDuplicateKey(provider: string, apiKey: string): Promis
   await ensureSchema();
   const r = await getTurso().execute({
     sql: `SELECT * FROM api_keys WHERE provider = ? AND api_key = ? LIMIT 1`,
-    args: [provider, apiKey],
+    args: [provider, sanitizeApiKey(apiKey)],
   });
   return r.rows.length ? rowToKey(r.rows[0] as unknown as Record<string, unknown>) : null;
 }
@@ -458,13 +460,13 @@ export async function insertApiKey(k: {
   await ensureSchema();
   await getTurso().execute({
     sql: `INSERT INTO api_keys (id, provider, label, api_key) VALUES (?,?,?,?)`,
-    args: [k.id, k.provider, k.label, k.api_key],
+    args: [k.id, k.provider, k.label, sanitizeApiKey(k.api_key)],
   });
   return {
     id: k.id,
     provider: k.provider,
     label: k.label,
-    api_key: k.api_key,
+    api_key: sanitizeApiKey(k.api_key),
     status: "active",
     usage_count: 0,
     success_count: 0,

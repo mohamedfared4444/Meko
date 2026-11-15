@@ -21,6 +21,12 @@ export function classifyProviderError(status: number | undefined, message: strin
   if (/invalid\s*api\s*token|invalid\s*token|token\s*(is\s*)?invalid|authentication\s*error/.test(msg)) {
     return "disabled";
   }
+  // مفتاح يحمل أحرفًا غير صالحة لترويسات HTTP (نسخ من محادثات عربية) — fetch
+  // يرمي «Cannot convert argument to a ByteString» قبل أي نداء فعلي: المفتاح
+  // بهذا الشكل لا يصلح للاستخدام أبدًا → عطّله بدل إعادة تجربته للأبد
+  if (/bytestring|invalid character in header|header value contains/.test(msg)) {
+    return "disabled";
+  }
 
   // 2) نفاد الرصيد/الحد اليومي → exhausted (قبل فحص 400!)
   if (status === 402) return "exhausted";

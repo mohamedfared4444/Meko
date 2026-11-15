@@ -500,6 +500,7 @@ export async function runGeneration(opts: {
     nextAttemptAt: 0,
     preferredProvider: preferred,
     skippedNote,
+    noKeyRetries: 0,
   };
 
   // 3) تسجيل المهمة في Turso قبل أي نداء خارجي
@@ -543,15 +544,24 @@ export async function runGeneration(opts: {
     // لم يعد أي مفتاح نشطًا بعد فشل كل المحاولات (عُطّلت أثناءها) → الفشل النهائي
     // الصريح فورًا بدل ترك المهمة معلقة عند 0% بانتظار مفتاح لن يأتي أبدًا
     const remaining = await candidatePool(model, preferred);
+    const lastErrClean = run.lastError?.replace(/^\[[a-z]+\]\s*/i, "") ?? "";
     if (remaining.length === 0) {
-      const msg = terminalNoKeysMessage(run.lastError?.replace(/^\[[a-z]+\]\s*/i, "") ?? "");
+      const msg = terminalNoKeysMessage(lastErrClean);
+      await updateTask(taskId, { status: "failed", error_message: msg, progress: 0 });
+      return { kind: "failed", taskId, text: `❌ فشلت المهمة: ${msg}` };
+    }
+    // مفاتيح نشطة لكن فشلت محاولاتها الآن (أخطاء مؤقتة) → انتظار مع إعادة جدولة؛
+    // بعد 3 دورات فاشلة متتالية نُعلن الفشل النهائي بدل التعليق عند 0% إلى الأبد
+    const retries = (params.noKeyRetries ?? 0) + 1;
+    if (retries >= 3) {
+      const msg = terminalNoKeysMessage(lastErrClean);
       await updateTask(taskId, { status: "failed", error_message: msg, progress: 0 });
       return { kind: "failed", taskId, text: `❌ فشلت المهمة: ${msg}` };
     }
     // فشل الإنشاء على كل المفاتيح ← تبقى processing وبانتظار مفتاح صالح (قاعدة 4.3.3)
     const nextAt = Date.now() + RECREATE_COOLDOWN_MS;
     await updateTask(taskId, {
-      params_json: JSON.stringify({ ...params, nextAttemptAt: nextAt }),
+      params_json: JSON.stringify({ ...params, nextAttemptAt: nextAt, noKeyRetries: retries }),
       status: "processing",
       progress: 0,
       error_message: "بانتظار توفر مفتاح صالح…",
@@ -677,7 +687,7 @@ export async function refreshTask(taskId: string): Promise<RunOutcome> {
 
   // مهمة بلا معرّف مزود: لم ينجح الإنشاء بعد — أعد المحاولة بعد فترة تهدئة 45 ثانية
   if (!task.provider_task_id) {
-    const params = parseParams<{ nextAttemptAt?: number; preferredProvider?: string }>(task);
+    const params = parseParams<{ nextAttemptAt?: number; preferredProvider?: string; noKeyRetries?: number }>(task);
     // لا مفاتيح نشطة إطلاقًا → فشل نهائي فوري بدل انتظار أبدي عالق عند 0%
     const poolNow = await candidatePool(model, params.preferredProvider);
     if (poolNow.length === 0) {
@@ -694,13 +704,21 @@ export async function refreshTask(taskId: string): Promise<RunOutcome> {
     if (!run.ok) {
       // فشلت إعادة المحاولة وعُطّلت بقية المفاتيح؟ → فشل نهائي بدل حلقة انتظار لا تنتهي
       const remaining = await candidatePool(model, params.preferredProvider);
+      const lastErrClean = run.lastError?.replace(/^\[[a-z]+\]\s*/i, "") || lastFailedAttemptError(task);
       if (remaining.length === 0) {
-        const msg = terminalNoKeysMessage(run.lastError?.replace(/^\[[a-z]+\]\s*/i, "") || lastFailedAttemptError(task));
+        const msg = terminalNoKeysMessage(lastErrClean);
+        await updateTask(taskId, { status: "failed", error_message: msg, progress: 0 });
+        return { kind: "failed", taskId, text: `❌ فشلت المهمة: ${msg}` };
+      }
+      // مفاتيح نشطة لكنها تفشل مؤقتًا — بعد 3 دورات متتالية نُعلن الفشل النهائي
+      const retries = (params.noKeyRetries ?? 0) + 1;
+      if (retries >= 3) {
+        const msg = terminalNoKeysMessage(lastErrClean);
         await updateTask(taskId, { status: "failed", error_message: msg, progress: 0 });
         return { kind: "failed", taskId, text: `❌ فشلت المهمة: ${msg}` };
       }
       await updateTask(taskId, {
-        params_json: JSON.stringify({ ...parseParams(task), nextAttemptAt: Date.now() + RECREATE_COOLDOWN_MS }),
+        params_json: JSON.stringify({ ...parseParams(task), nextAttemptAt: Date.now() + RECREATE_COOLDOWN_MS, noKeyRetries: retries }),
         error_message: "بانتظار توفر مفتاح صالح…",
       });
       const fresh = (await getTask(taskId))!;

@@ -22,6 +22,15 @@ export function sanitizeEnvValue(raw: string | undefined | null): string {
     .trim();
 }
 
+/**
+ * تعقيم مفتاح API المخزن — إزالة الأحرف غير المرئية وأحرف التحكم التي تُدخل
+ * عند النسخ من محادثات/مستندات عربية. هذه الأحرف تجعل fetch يفشل بـ
+ * «Cannot convert argument to a ByteString» أو تفسد مصادقة المزود بصمت.
+ */
+export function sanitizeApiKey(raw: string | null | undefined): string {
+  return (raw ?? "").replace(INVISIBLE_CHARS, "").replace(/[\u0000-\u001F\u007F]/g, "").trim();
+}
+
 /** تحويل رابط Turso libsql:// إلى https:// (مكافئ 100% لدى Turso) مع تنظيف الشكل */
 export function normalizeTursoUrl(raw: string | undefined | null): string {
   let url = sanitizeEnvValue(raw);

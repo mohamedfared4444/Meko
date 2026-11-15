@@ -238,26 +238,92 @@ export const cloudflareAdapter: ProviderAdapter = {
 
     // 1) نداء التوليد — الهيدرات حسب نوع المفتاح: Bearer أو X-Auth-Email/X-Auth-Key
     const genBudget = Math.max(5_000, Math.min(GENERATION_TIMEOUT_MS, remainingMs()));
-    const genTimer = withTimeout(genBudget);
-    let res: Response;
-    try {
-      res = await fetch(`${CF_BASE}/accounts/${encodeURIComponent(creds.accountId)}/ai/run/${model}`, {
-        method: "POST",
-        headers: {
-          ...cloudflareAuthHeaders(creds),
-          "Content-Type": "application/json",
-          Accept: "application/json, image/*",
-        },
-        body: JSON.stringify({ prompt }),
-        signal: genTimer.signal,
-      });
-    } catch (e) {
-      throw new ProviderHttpError(
-        `تعذر الوصول لـ Cloudflare Workers AI: ${e instanceof Error && e.name === "AbortError" ? "timeout" : e instanceof Error ? e.message : String(e)}`,
-        undefined,
-      );
-    } finally {
-      genTimer.done();
+    let res: Response | null = null;
+    let primaryError: unknown = null;
+    {
+      const timer = withTimeout(genBudget);
+      try {
+        res = await fetch(`${CF_BASE}/accounts/${encodeURIComponent(creds.accountId)}/ai/run/${model}`, {
+          method: "POST",
+          headers: {
+            ...cloudflareAuthHeaders(creds),
+            "Content-Type": "application/json",
+            Accept: "application/json, image/*",
+          },
+          body: JSON.stringify({ prompt }),
+          signal: timer.signal,
+        });
+      } catch (e) {
+        primaryError = e;
+      } finally {
+        timer.done();
+      }
+    }
+
+    // 1.5) بديل ذكي للصيغة الثلاثية: فشل بناء النداء نفسه (مثل ByteString بسبب
+    // بريد غير لاتيني أو نائب نصي منسوخ مثل «بريدك_الإلكتروني») → جرّب الجزء
+    // الثالث كتوكن Bearer مباشرة — لا يمر عبر هيدر البريد أصلًا. خطأ شائع:
+    // توكن API (يبدأ بـ Cf) يوضع في خانة Global API Key بالصيغة الثلاثية.
+    if (!res && creds.auth.kind === "globalKey") {
+      const left = Math.max(5_000, Math.min(GENERATION_TIMEOUT_MS, remainingMs()));
+      const timer = withTimeout(left);
+      try {
+        res = await fetch(`${CF_BASE}/accounts/${encodeURIComponent(creds.accountId)}/ai/run/${model}`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${creds.auth.globalApiKey}`,
+            "Content-Type": "application/json",
+            Accept: "application/json, image/*",
+          },
+          body: JSON.stringify({ prompt }),
+          signal: timer.signal,
+        });
+      } catch {
+        /* كلا الشكلين فشلا قبل النداء — رسالة الخطأ المجمّعة أدناه */
+      } finally {
+        timer.done();
+      }
+    }
+
+    if (!res) {
+      const raw =
+        primaryError instanceof Error && primaryError.name === "AbortError"
+          ? "timeout"
+          : primaryError instanceof Error
+            ? primaryError.message
+            : String(primaryError);
+      if (/bytestring|invalid character in header/i.test(raw)) {
+        throw new ProviderHttpError(
+          "مفتاح Cloudflare يحتوي أحرفًا غير صالحة لترويسات HTTP (Invalid token characters) — غالبًا بريد بنص عربي أو نائب نصي مثل «بريدك_الإلكتروني». الصيغة الصحيحة: ACCOUNT_ID:API_TOKEN أو ACCOUNT_ID:EMAIL:GLOBAL_API_KEY ببريد حقيقي لاتيني",
+          400,
+        );
+      }
+      throw new ProviderHttpError(`تعذر الوصول لـ Cloudflare Workers AI: ${raw}`, undefined);
+    }
+
+    // 1.6) نجح النداء لكن المصادقة رُفضت (400/401/403) والمفتاح بصيغة ثلاثية →
+    // جرّب الجزء الثالث كتوكن Bearer قبل التخلي — يُنقذ المفاتيح التي وُضع
+    // فيها توكن API في خانة المفتاح العام دون أي تعديل من المستخدم
+    if (!res.ok && (res.status === 400 || res.status === 401 || res.status === 403) && creds.auth.kind === "globalKey") {
+      const left = Math.max(5_000, Math.min(GENERATION_TIMEOUT_MS, remainingMs()));
+      const timer = withTimeout(left);
+      try {
+        const res2 = await fetch(`${CF_BASE}/accounts/${encodeURIComponent(creds.accountId)}/ai/run/${model}`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${creds.auth.globalApiKey}`,
+            "Content-Type": "application/json",
+            Accept: "application/json, image/*",
+          },
+          body: JSON.stringify({ prompt }),
+          signal: timer.signal,
+        });
+        if (res2.ok) res = res2; // نجح البديل — نكمل به
+      } catch {
+        /* أبقِ الاستجابة الأصلية — رسالة خطأها أوضح للمستخدم */
+      } finally {
+        timer.done();
+      }
     }
 
     // 2) قراءة الاستجابة — نقرأ الجسم كاملًا ثم نفحصه على مرحلتين:
@@ -301,8 +367,14 @@ export const cloudflareAdapter: ProviderAdapter = {
         errMsg = snippet ? `HTTP ${res.status} من Cloudflare: ${snippet}` : "";
       }
 
-      if (!res.ok) throw new ProviderHttpError(errMsg || `HTTP ${res.status} من Cloudflare`, res.status);
-      if (!success || errMsg) throw new ProviderHttpError(errMsg || "استجابة Cloudflare بلا نجاح", res.status || 502);
+      // تلميح الصيغة عند فشل مصادقة المفتاح العام — يساعد على تصحيح المفتاح فورًا
+      const authHint =
+        creds.auth.kind === "globalKey" && (res.status === 400 || res.status === 401 || res.status === 403)
+          ? " — إن كان الجزء الثالث من مفتاحك توكن API (يبدأ بـ Cf) فالصيغة الصحيحة هي ACCOUNT_ID:API_TOKEN (جزآن فقط)، ومفتاح API العام الحقيقي 37 حرفًا hex من صفحة My Profile"
+          : "";
+
+      if (!res.ok) throw new ProviderHttpError((errMsg || `HTTP ${res.status} من Cloudflare`) + authHint, res.status);
+      if (!success || errMsg) throw new ProviderHttpError((errMsg || "استجابة Cloudflare بلا نجاح") + authHint, res.status || 502);
 
       const result = body.result as { image?: string } | undefined;
       const b64 = typeof result?.image === "string" ? result.image : "";
