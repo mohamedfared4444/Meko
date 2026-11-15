@@ -15,8 +15,14 @@ export const MODELS: ModelDef[] = [
     canonical: "gpt-image-2-6/flare-text-to-image",
     aliases: ["gpt-image-2.6/flare-text-to-image"],
     type: "image",
-    providers: ["kie", "cometapi"],
+    // ترتيب الأولوية مقصود — المزودات المجانية أولًا ثم المدفوعة كاحتياط:
+    // Cloudflare Workers AI (نقاط يومية مجانية) → Pollinations (مجاني بالكامل)
+    // → kie.ai → CometAPI. يُجرَّب أول مفتاح نشط من كل مزود بالتسلسل مع
+    // تبديل تلقائي عند أي خطأ أو نفاد حد.
+    providers: ["cloudflare", "pollinations", "kie", "cometapi"],
     providerModel: {
+      cloudflare: envModel("CLOUDFLARE_IMAGE_MODEL", "@cf/black-forest-labs/flux-1-schnell"),
+      pollinations: envModel("POLLINATIONS_IMAGE_MODEL", "flux"),
       kie: envModel("KIE_IMAGE_MODEL", "gpt-image-2-6/flare-text-to-image"),
       cometapi: envModel("COMETAPI_IMAGE_MODEL", "gpt-image-2.6-flare-text-to-image"),
     },
@@ -25,8 +31,12 @@ export const MODELS: ModelDef[] = [
     canonical: "grok-imagine-video-1-5-preview",
     aliases: ["grok-imagine-video-1.5-preview"],
     type: "video",
+    // الفيديو يعتمد على مفاتيح kie.ai النشطة (CometAPI احتياط) — المزودات
+    // المجانية لا تدعم توليد الفيديو، لذا لا تُدرج هنا.
     providers: ["kie", "cometapi"],
     providerModel: {
+      cloudflare: envModel("CLOUDFLARE_VIDEO_MODEL", ""),
+      pollinations: envModel("POLLINATIONS_VIDEO_MODEL", ""),
       kie: envModel("KIE_VIDEO_MODEL", "grok-imagine-video-1-5-preview"),
       cometapi: envModel("COMETAPI_VIDEO_MODEL", "grok-imagine-video-1-5-preview"),
     },
@@ -39,6 +49,8 @@ export const MODELS: ModelDef[] = [
     type: "image",
     providers: ["kie"],
     providerModel: {
+      cloudflare: envModel("CLOUDFLARE_SEGMENT_EDIT_MODEL", ""),
+      pollinations: envModel("POLLINATIONS_SEGMENT_EDIT_MODEL", ""),
       kie: envModel("KIE_SEGMENT_EDIT_MODEL", "grok-imagine-image-2.0/segment-edit"),
       cometapi: envModel("COMETAPI_SEGMENT_EDIT_MODEL", "grok-imagine-image-2.0/segment-edit"),
     },

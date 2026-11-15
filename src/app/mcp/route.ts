@@ -24,9 +24,10 @@ export const maxDuration = 60;
 
 const SERVER_INFO = { name: "media-generator-mcp", version: "1.2.0" } as const;
 
-const SERVER_INSTRUCTIONS = `AI media generation server (kie.ai + CometAPI with automatic sequential multi-key failover, plus video merging).
+const SERVER_INSTRUCTIONS = `AI media generation server (image: free Cloudflare Workers AI + free Pollinations first, then kie.ai + CometAPI; video: kie.ai + CometAPI — with automatic sequential multi-key failover, plus video merging).
 Workflow: call generate_image or generate_video. If the response contains finished URLs, show them to the user.
 If it returns a task_id with status PROCESSING, call get_task with that task_id every ~10 seconds until status is completed (show the URL) or failed (explain why).
+generate_image accepts an optional 'provider' argument (cloudflare | pollinations | kie | cometapi); when omitted the server automatically tries active Cloudflare keys first (free daily allowance), then falls back to Pollinations or kie.ai on any error or exhausted limit.
 IMPORTANT: the server automatically switches API keys in strict order on any failure (exhausted balance, invalid key, rate limits) and continues the SAME task under the same task_id — you will never encounter key/balance errors. Never stop or warn the user about keys or balances; just keep polling get_task until the result appears.
 To concatenate several finished clips into one video, call merge_videos with 'urls' (direct links) or 'task_ids' (completed video tasks, in merge order); track it with get_task the same way. Note: the merged file is stored on the merging service for ~24 hours only — tell the user to watch/download it promptly.
 Use list_media to recall previously generated media from the database.`;
@@ -72,15 +73,21 @@ const videoModels = videoModelEnumValues();
 function buildServer(): McpServer {
   const server = new McpServer(SERVER_INFO, { instructions: SERVER_INSTRUCTIONS });
 
-  // 1) generate_image — توليد صورة بـ gpt-image-2-6/flare-text-to-image
+  // 1) generate_image — توليد صورة: Cloudflare (مجاني) ثم Pollinations (مجاني) ثم kie.ai ثم CometAPI
   server.registerTool(
     "generate_image",
     {
       description:
-        "Generate an image with gpt-image-2-6/flare-text-to-image (automatic failover across all active keys). Returns the finished image URL if completed within the wait window, otherwise returns a task_id — then call get_task every ~10 seconds until completed, show the URL and stop.",
+        "Generate an image. Tries free Cloudflare Workers AI keys first, then free Pollinations, then kie.ai/CometAPI (automatic failover). Optional 'provider' argument forces a specific one. Returns the finished image URL if completed within the wait window, otherwise returns a task_id — then call get_task every ~10 seconds until completed, show the URL and stop.",
       inputSchema: {
         prompt: z.string().min(1).describe("What to draw. Detailed prompts give better results."),
         model: z.enum(imageModels as [string, ...string[]]).default("gpt-image-2-6/flare-text-to-image"),
+        provider: z
+          .enum(["auto", "cloudflare", "pollinations", "kie", "cometapi"])
+          .default("auto")
+          .describe(
+            "Optional provider override. auto = free Cloudflare keys first, then Pollinations, then kie.ai/CometAPI. Use cloudflare for the free daily allowance, pollinations for a fully free no-key generation.",
+          ),
         aspect_ratio: z
           .enum(["auto", "1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "4:5", "16:9", "9:16", "2:1", "1:2", "21:9", "9:21", "3:1", "1:3"])
           .default("auto"),
@@ -111,6 +118,7 @@ function buildServer(): McpServer {
             image_task_id: args.image_task_id,
             mask_indexs: args.mask_indexs,
           },
+          preferredProvider: args.provider,
           waitSeconds: args.wait_seconds ?? 90,
           onProgress: makeProgressBridge(extra as HandlerExtra),
         });

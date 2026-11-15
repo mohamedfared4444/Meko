@@ -13,15 +13,22 @@ import type { ErrorClass } from "./types";
 export function classifyProviderError(status: number | undefined, message: string): ErrorClass {
   const msg = (message || "").toLowerCase();
 
-  // 1) مفتاح مرفوض → disabled
+  // 1) مفتاح مرفوض → disabled (يشمل أنماط Cloudflare: Invalid API Token / Authentication error)
   if (status === 401 || status === 403) return "disabled";
   if (/invalid\s*api\s*key|unauthorized|forbidden|authentication|api\s*key\s*(is\s*)?invalid/.test(msg)) {
     return "disabled";
   }
+  if (/invalid\s*api\s*token|invalid\s*token|token\s*(is\s*)?invalid|authentication\s*error/.test(msg)) {
+    return "disabled";
+  }
 
-  // 2) نفاد الرصيد → exhausted (قبل فحص 400!)
+  // 2) نفاد الرصيد/الحد اليومي → exhausted (قبل فحص 400!)
   if (status === 402) return "exhausted";
   if (/insufficient|quota|balance|credit|out\s*of\s*credits|exhausted|充值|no\s*enough/.test(msg)) {
+    return "exhausted";
+  }
+  // نقاط Cloudflare اليومية المجانية المنتهية (neurons) أو تجاوز الحد الشهري/اليومي
+  if (/neurons|daily\s*(free\s*)?(quota|limit|allotment)|monthly\s*(quota|limit)|exceeded\s*(your|the)\s*(daily|monthly|free)/.test(msg)) {
     return "exhausted";
   }
 

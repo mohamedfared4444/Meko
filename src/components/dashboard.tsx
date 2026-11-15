@@ -59,12 +59,45 @@ interface TasksResponse {
 // ---------------------------------------------------------------------------
 
 const TOOLS: Array<{ name: string; desc: string }> = [
-  { name: "generate_image", desc: "توليد صورة من وصف نصي عبر gpt-image-2-6/flare-text-to-image" },
+  { name: "generate_image", desc: "توليد صورة من وصف نصي — Cloudflare (مجاني) ثم Pollinations (مجاني) ثم kie.ai مع تبديل تلقائي، مع إمكانية تحديد مزود معين" },
   { name: "generate_video", desc: "توليد فيديو بصوت متزامن أصلي عبر grok-imagine-video-1-5-preview" },
   { name: "merge_videos", desc: "دمج عدة مقاطع فيديو في مقطع واحد بالترتيب المطلوب" },
   { name: "get_task", desc: "تتبع أي مهمة بمعرّفها حتى الاكتمال وعرض الروابط" },
   { name: "list_media", desc: "استرجاع أحدث الصور والفيديوهات المخزنة بروابطها" },
 ];
+
+/** تسميات المزودات المعروضة في الواجهة */
+const PROVIDER_LABELS: Record<string, string> = {
+  kie: "kie.ai",
+  cometapi: "CometAPI",
+  cloudflare: "Cloudflare AI",
+  pollinations: "Pollinations",
+};
+
+/** تلميح صيغة المفتاح لكل مزود */
+function providerHint(provider: string) {
+  if (provider === "cloudflare") {
+    return (
+      <p className="text-[11px] leading-relaxed text-white/50">
+        صيغة مفتاح Cloudflare: <code dir="ltr" className="font-mono text-white/70">ACCOUNT_ID:API_TOKEN</code> — مفصولين بنقطتين، ويُخزّنان معًا في قاعدة البيانات ويُفصلان تلقائيًا عند التوليد.
+      </p>
+    );
+  }
+  if (provider === "pollinations") {
+    return (
+      <p className="text-[11px] leading-relaxed text-white/50">
+        مزود مجاني مفتوح بلا مفتاح حقيقي — اكتب <code dir="ltr" className="font-mono text-white/70">free</code> في حقل المفتاح لتخزينه وترتيبه ضمن المجمع.
+      </p>
+    );
+  }
+  return null;
+}
+
+function keyInputPlaceholder(provider: string): string {
+  if (provider === "cloudflare") return "ACCOUNT_ID:API_TOKEN";
+  if (provider === "pollinations") return "اكتب free (بلا مفتاح حقيقي)";
+  return "ألصق مفتاح API هنا";
+}
 
 function statusBadge(status: string) {
   switch (status) {
@@ -335,6 +368,8 @@ export default function Dashboard() {
                   <SelectContent>
                     <SelectItem value="kie">kie.ai</SelectItem>
                     <SelectItem value="cometapi">CometAPI</SelectItem>
+                    <SelectItem value="cloudflare">Cloudflare AI (مجاني)</SelectItem>
+                    <SelectItem value="pollinations">Pollinations (مجاني)</SelectItem>
                   </SelectContent>
                 </Select>
                 <div className="flex gap-2">
@@ -348,7 +383,7 @@ export default function Dashboard() {
               </div>
               <div className="flex gap-2">
                 <Input
-                  placeholder="ألصق مفتاح API هنا"
+                  placeholder={keyInputPlaceholder(provider)}
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   className="h-11 rounded-xl bg-white/[0.05] border-white/[0.12] text-white font-mono text-left transition-smooth"
@@ -361,6 +396,7 @@ export default function Dashboard() {
                   إضافة
                 </Button>
               </div>
+              {providerHint(provider)}
 
               <div className="max-h-96 overflow-y-auto pe-1">
                 {keys.length === 0 ? (
@@ -372,7 +408,7 @@ export default function Dashboard() {
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-xs text-white/40 font-mono">#{i + 1}</span>
                           <Badge variant="outline" className="rounded-full border-white/[0.14] text-white/80">
-                            {k.provider === "kie" ? "kie.ai" : "CometAPI"}
+                            {PROVIDER_LABELS[k.provider] ?? k.provider}
                           </Badge>
                           <code className="font-mono text-xs text-white/75" dir="ltr">
                             {k.masked}

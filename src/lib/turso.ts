@@ -5,6 +5,7 @@
 // داخل حزمة الدالة — بلا قراءة node_modules وقت التشغيل نهائيًا.
 import { createClient, type Client, type InValue } from "../../node_modules/@libsql/client/lib-esm/web.js";
 import { maskEnvValue, normalizeTursoUrl, sanitizeEnvValue } from "@/lib/env";
+import { seedDefaultKeys } from "./seed";
 import type { ApiKeyRow, AttemptRecord, MediaType, ProviderId, TaskRow, TaskStatus } from "./types";
 
 /**
@@ -139,7 +140,18 @@ export function ensureSchema(): Promise<void> {
         );
         CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks (seq DESC);
         CREATE INDEX IF NOT EXISTS idx_keys_pool ON api_keys (provider, status, seq);
+        CREATE TABLE IF NOT EXISTS meta (
+          key TEXT PRIMARY KEY,
+          value TEXT
+        );
       `);
+      // التهيئة الأولية: مفاتيح المزودات المجانية إن لم تكن موجودة — best-effort
+      // (فشلها لا يُفشل إنشاء المخطط، ويعاد المحاولة في التشغيل البارد التالي)
+      try {
+        await seedDefaultKeys(db);
+      } catch (e) {
+        console.error("[seed] فشل تهيئة المفاتيح الافتراضية:", e instanceof Error ? e.message : String(e));
+      }
     })().catch((e) => {
       schemaPromise = null; // اسمح بإعادة المحاولة في الطلب التالي
       throw e;
@@ -349,7 +361,12 @@ export async function deleteTasks(ids: string[]): Promise<number> {
  * دون الحاجة لإضافة مفاتيح يدويًا من لوحة الإدارة.
  */
 function envKeyRow(provider: ProviderId): ApiKeyRow | null {
-  const envName = provider === "kie" ? "KIE_API_KEY" : "COMETAPI_API_KEY";
+  // احتياط متغيرات البيئة للمزودات المدفوعة فقط — المزودات المجانية
+  // (cloudflare/pollinations) تُدار حصريًا من قاعدة البيانات.
+  const envName =
+    provider === "kie" ? "KIE_API_KEY" :
+    provider === "cometapi" ? "COMETAPI_API_KEY" : null;
+  if (!envName) return null;
   const value = sanitizeEnvValue(process.env[envName]);
   if (!value) return null;
   return {

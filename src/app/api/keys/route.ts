@@ -7,6 +7,9 @@ import type { ProviderId } from "@/lib/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/** المزودات المدعومة في مدير المفاتيح */
+const SUPPORTED_PROVIDERS: string[] = ["kie", "cometapi", "cloudflare", "pollinations"];
+
 /** عرض المفاتيح كاملة الترتيب — مقنّعة دائمًا، لا يُعاد المفتاح الكامل في أي استجابة */
 export async function GET() {
   try {
@@ -34,7 +37,7 @@ export async function GET() {
   }
 }
 
-/** إضافة مفتاح — مع رفض التكرار لنفس المزود */
+/** إضافة مفتاح — مع رفض التكرار لنفس المزود والتحقق من صيغة مفاتيح Cloudflare */
 export async function POST(req: Request) {
   let body: { provider?: string; api_key?: string; label?: string };
   try {
@@ -47,23 +50,48 @@ export async function POST(req: Request) {
   const apiKey = (body.api_key ?? "").trim();
   const label = (body.label ?? "").trim().slice(0, 100);
 
-  if (provider !== "kie" && provider !== "cometapi") {
-    return NextResponse.json({ error: "المزود غير مدعوم — القيم المقبولة: kie أو cometapi." }, { status: 400 });
+  if (!SUPPORTED_PROVIDERS.includes(provider)) {
+    return NextResponse.json(
+      { error: `المزود غير مدعوم — القيم المقبولة: ${SUPPORTED_PROVIDERS.join(" أو ")}.` },
+      { status: 400 },
+    );
   }
-  if (!apiKey || apiKey.length < 8) {
+
+  // مفتاح Cloudflare بصيغة ACCOUNT_ID:API_TOKEN — يُفصلان عند نقطتين ويُطهَّران
+  let normalizedKey = apiKey;
+  if (provider === "cloudflare") {
+    const parts = apiKey.split(":");
+    if (parts.length !== 2 || parts[0].trim().length < 4 || parts[1].trim().length < 4) {
+      return NextResponse.json(
+        { error: "مفتاح Cloudflare يجب أن يكون بصيغة ACCOUNT_ID:API_TOKEN — معرّف الحساب والتوكن مفصولين بنقطتين." },
+        { status: 400 },
+      );
+    }
+    normalizedKey = `${parts[0].trim()}:${parts[1].trim()}`;
+  }
+
+  // Pollinations مجاني بلا مفتاح حقيقي — يقبل أي نص تعريفي مثل «free»
+  if (provider === "pollinations") {
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: "أدخل أي نص تعريفي في حقل المفتاح مثل free — مزود Pollinations مجاني ولا يتطلب مفتاحًا حقيقيًا." },
+        { status: 400 },
+      );
+    }
+  } else if (apiKey.length < 8) {
     return NextResponse.json({ error: "المفتاح مطلوب (8 أحرف على الأقل)." }, { status: 400 });
   }
 
   try {
-    const dup = await findDuplicateKey(provider, apiKey);
+    const dup = await findDuplicateKey(provider, normalizedKey);
     if (dup) {
       return NextResponse.json(
-        { error: `هذا المفتاح مضاف مسبقًا لنفس المزود (${maskKey(apiKey)}).` },
+        { error: `هذا المفتاح مضاف مسبقًا لنفس المزود (${maskKey(normalizedKey)}).` },
         { status: 409 },
       );
     }
 
-    const created = await insertApiKey({ id: randomUUID(), provider, label, api_key: apiKey });
+    const created = await insertApiKey({ id: randomUUID(), provider, label, api_key: normalizedKey });
     return NextResponse.json(
       {
         key: {

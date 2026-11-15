@@ -160,6 +160,34 @@ interface CandidateRun {
   lastError?: string;
 }
 
+/**
+ * ترتيب مجمع المفاتيح حسب أولوية المزودات في تعريف الموديل — مفاتيح كل مزود
+ * بالتسلسل (seq) ثم مزوده التالي. للموديل الصوري: cloudflare → pollinations
+ * → kie → cometapi (المجاني أولًا). هذا الترتيب يحترم الأولوية المطلوبة بدل
+ * الترتيب العام لوقت الإضافة.
+ */
+function orderPoolByProvider(pool: ApiKeyRow[], providers: ProviderId[]): ApiKeyRow[] {
+  const out: ApiKeyRow[] = [];
+  for (const p of providers) out.push(...pool.filter((k) => k.provider === p));
+  const rest = pool.filter((k) => !providers.includes(k.provider));
+  out.push(...rest); // احتياط: أي مفاتيح بمزود خارج القائمة تُضاف نهايةً
+  return out;
+}
+
+/**
+ * مجمع المرشحين لأداة توليد: تفضيل مزود معين يقصر القائمة عليه، وإلا فالترتيب
+ * الافتراضي للموديل (المجاني أولًا). يُستخدم في الإنشاء الأول وإعادة المحاولة
+ * بعد الانقطاع حتى يبقى تفضيل العميل محفوظًا.
+ */
+async function candidatePool(model: ModelDef, preferredProvider?: string): Promise<ApiKeyRow[]> {
+  const wanted =
+    preferredProvider && preferredProvider !== "auto" && model.providers.includes(preferredProvider as ProviderId)
+      ? [preferredProvider as ProviderId]
+      : model.providers;
+  const pool = await getKeyPool(wanted);
+  return orderPoolByProvider(pool, wanted);
+}
+
 function attemptRecord(keyRow: ApiKeyRow, ok: boolean, errorClass: string | null, error: string | null): AttemptRecord {
   return {
     provider: keyRow.provider,
@@ -321,6 +349,8 @@ export async function runGeneration(opts: {
     image_task_id?: string;
     mask_indexs?: number[];
   };
+  /** مزود مفضل اختياري — يقصر المرشحين عليه بدل الترتيب الافتراضي المجاني أولًا */
+  preferredProvider?: string;
   waitSeconds: number;
   onProgress?: ProgressCallback;
 }): Promise<RunOutcome> {
@@ -332,10 +362,20 @@ export async function runGeneration(opts: {
     return { kind: "invalid", text: "❌ معطيات غير صالحة: الوصف (prompt) مطلوب." };
   }
 
-  // 2) مجمع المفاتيح بترتيب الإضافة — فارغ → رد no_keys
-  const candidates = await getKeyPool(model.providers);
+  // المزود المفضل: يجب أن يكون مدعومًا لهذا الموديل
+  const preferred = opts.preferredProvider?.trim() || "auto";
+  if (preferred !== "auto" && !model.providers.includes(preferred as ProviderId)) {
+    return {
+      kind: "invalid",
+      text: `❌ معطيات غير صالحة: المزود «${preferred}» لا يدعم الموديل ${model.canonical}. المزودات المدعومة: ${model.providers.join("، ")}.`,
+    };
+  }
+
+  // 2) مجمع المفاتيح بترتيب أولوية المزودات — فارغ → رد no_keys
+  const candidates = await candidatePool(model, preferred);
   if (candidates.length === 0) {
-    return { kind: "invalid", text: `❌ لا توجد مفاتيح نشطة لخدمة ${model.canonical}. أضف مفتاحًا واحدًا على الأقل من واجهة الإدارة، ثم أعد المحاولة.` };
+    const wanted = preferred !== "auto" ? preferred : model.providers.join("، ");
+    return { kind: "invalid", text: `❌ لا توجد مفاتيح نشطة لخدمة ${model.canonical} (المزودات: ${wanted}). أضف مفتاحًا واحدًا على الأقل من واجهة الإدارة، ثم أعد المحاولة.` };
   }
 
   const taskId = randomUUID();
@@ -343,6 +383,7 @@ export async function runGeneration(opts: {
     args: opts.args,
     waitSeconds: opts.waitSeconds,
     nextAttemptAt: 0,
+    preferredProvider: preferred,
   };
 
   // 3) تسجيل المهمة في Turso قبل أي نداء خارجي
@@ -452,7 +493,7 @@ async function waitWindow(
     if (step.action === "recreate") {
       // فشل في منتصف المهمة بسبب مفتاح/رصيد → إعادة إنشاء نفس المهمة بنفس
       // task_id على المفتاح التالي تلقائيًا دون توقف (قاعدة 4.3.2)
-      const candidates = await getKeyPool(model.providers);
+      const candidates = await candidatePool(model, parseParams<{ preferredProvider?: string }>(task).preferredProvider);
       const run = await tryCandidates(task, model, buildInputFromParams(model, task), candidates, 0);
       if (!run.ok) {
         if (run.paramsError) {
@@ -507,12 +548,12 @@ export async function refreshTask(taskId: string): Promise<RunOutcome> {
 
   // مهمة بلا معرّف مزود: لم ينجح الإنشاء بعد — أعد المحاولة بعد فترة تهدئة 45 ثانية
   if (!task.provider_task_id) {
-    const params = parseParams<{ nextAttemptAt?: number }>(task);
+    const params = parseParams<{ nextAttemptAt?: number; preferredProvider?: string }>(task);
     if ((params.nextAttemptAt ?? 0) > Date.now()) {
       const fresh = (await getTask(taskId))!;
       return { kind: "processing", taskId, progress: fresh.progress, text: formatProcessing(fresh) + "\n\n(بانتظار توفر مفتاح صالح — تجري إعادة المحاولة تلقائيًا)" };
     }
-    const candidates = await getKeyPool(model.providers);
+    const candidates = await candidatePool(model, params.preferredProvider);
     const run = await tryCandidates(task, model, buildInputFromParams(model, task), candidates, 0);
     if (!run.ok) {
       await updateTask(taskId, {
@@ -543,7 +584,7 @@ export async function refreshTask(taskId: string): Promise<RunOutcome> {
     return { kind: "failed", taskId, text: formatFailed(fresh) };
   }
   if (step.action === "recreate") {
-    const candidates = await getKeyPool(model.providers);
+    const candidates = await candidatePool(model, parseParams<{ preferredProvider?: string }>(task).preferredProvider);
     const run = await tryCandidates(task, model, buildInputFromParams(model, task), candidates, 0);
     if (!run.ok) {
       await updateTask(taskId, {
