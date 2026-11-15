@@ -12,7 +12,7 @@ import { ProviderHttpError, type ProviderAdapter } from "./types-adapter";
  *     Content-Type: application/json
  *     {"prompt": prompt}
  *
- * الاستجابة تقبل شكلين:
+ * الاستجابة تقبل شكلين (يُفحص content-type ثم magic bytes كضمانة):
  *  - JSON يحتوي result.image بصيغة Base64 (الشكل الافتراضي لـ REST API)
  *  - صورة ثنائية خام (raw PNG/JPEG) إذا أعادها الخادم مباشرة
  *
@@ -44,8 +44,8 @@ export function parseCloudflareKey(rawKey: string): CloudflareCreds {
   return { accountId, apiToken };
 }
 
-/** تخمين نوع الصورة من البايتات الأولى (magic bytes) */
-function sniffImageType(bytes: Uint8Array): string {
+/** تخمين نوع الصورة من البايتات الأولى (magic bytes) — null إن لم تكن صورة معروفة */
+function sniffImageType(bytes: Uint8Array): string | null {
   if (bytes.length >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
     return "image/png";
   }
@@ -55,7 +55,7 @@ function sniffImageType(bytes: Uint8Array): string {
   if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP") {
     return "image/webp";
   }
-  return "image/png"; // الافتراضي الأكثر شيوعًا لناتج flux
+  return null;
 }
 
 /** امتداد ملف مناسب لنوع الصورة */
@@ -175,15 +175,24 @@ export const cloudflareAdapter: ProviderAdapter = {
       genTimer.done();
     }
 
-    // 2) قراءة الاستجابة — ثنائية خام أو JSON يحتوي Base64
+    // 2) قراءة الاستجابة — نقرأ الجسم كاملًا ثم نفحصه على مرحلتين:
+    //    أ) content-type: «image/png» أو «image/jpeg» أو أي image/* → صورة ثنائية خام
+    //    ب) «application/json» → نستخرج result.image (Base64)
+    //    ضمانة إضافية: لو وسم الخادم الجسم بـ octet-stream أو بدون وسم،
+    //    نكشف magic bytes (PNG/JPEG/WEBP) ونعامله ثنائيًا حتى لو خالف الهيدر.
     const contentTypeHeader = (res.headers.get("content-type") || "").toLowerCase();
+    const rawBytes = new Uint8Array(await res.arrayBuffer());
+    const magicType = sniffImageType(rawBytes);
+    const headerSaysImage = contentTypeHeader.startsWith("image/");
+    const headerSaysJson = contentTypeHeader.includes("application/json");
     let imageBytes: Uint8Array | null = null;
 
-    if (contentTypeHeader.startsWith("image/")) {
-      const buf = new Uint8Array(await res.arrayBuffer());
-      if (buf.length > 0) imageBytes = buf;
+    if (headerSaysImage || (!headerSaysJson && magicType)) {
+      // صورة ثنائية خام (raw binary) — تحويلها لاحقًا إلى رابط عبر الرفع
+      if (!res.ok) throw new ProviderHttpError(`HTTP ${res.status} من Cloudflare`, res.status);
+      if (rawBytes.length > 0) imageBytes = rawBytes;
     } else {
-      const text = await res.text();
+      const text = new TextDecoder().decode(rawBytes);
       let body: Record<string, unknown> = {};
       try {
         body = JSON.parse(text) as Record<string, unknown>;
@@ -201,6 +210,7 @@ export const cloudflareAdapter: ProviderAdapter = {
       const b64 = typeof result?.image === "string" ? result.image : "";
       if (!b64) throw new ProviderHttpError("استجابة Cloudflare بلا صورة (result.image مفقود)", 502);
       try {
+        // Base64 → بايتات خام (مكافئ لـ Buffer.from(b64, 'base64'))
         const bin = atob(b64);
         imageBytes = new Uint8Array(bin.length);
         for (let i = 0; i < bin.length; i++) imageBytes[i] = bin.charCodeAt(i);
@@ -214,7 +224,9 @@ export const cloudflareAdapter: ProviderAdapter = {
     }
 
     // 3) رفع الصورة وتحويلها إلى رابط مباشر بنفس صيغة المشروع
-    const url = await uploadImage(imageBytes, sniffImageType(imageBytes));
+    //    (نستخدم magic bytes لتحديد النوع، ومع fallback الافتراضي PNG لناتج flux)
+    const finalType = sniffImageType(imageBytes) ?? "image/png";
+    const url = await uploadImage(imageBytes, finalType);
     return { urls: [url] };
   },
 

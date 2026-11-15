@@ -125,16 +125,56 @@ async function buildTaskIdMap(ids: string[]): Promise<Map<string, string>> {
 
 export function formatCompleted(task: TaskRow): string {
   const urls = resultUrls(task);
+  const via = task.provider
+    ? `\n\nالمنفّذ: ${providerDisplayName(task.provider)}${task.key_id ? " (مفتاح نشط من قاعدة البيانات)" : ""}`
+    : "";
+  const note = fallbackNote(task);
   if (task.type === "image") {
     const first = urls[0] ?? "";
-    return `✅ تم توليد الصورة بنجاح\n\n![image](${first})\n\nالرابط المباشر: ${first}`;
+    return `✅ تم توليد الصورة بنجاح\n\n![image](${first})\n\nالرابط المباشر: ${first}${via}${note}`;
   }
   if (task.type === "video") {
     const lines = urls.map((u) => `الرابط المباشر: ${u}`).join("\n");
-    return `✅ تم توليد الفيديو بنجاح\n\n${lines}`;
+    return `✅ تم توليد الفيديو بنجاح\n\n${lines}${via}${note}`;
   }
   const lines = urls.map((u) => `الرابط المباشر: ${u}`).join("\n");
-  return `✅ تم دمج المقاطع بنجاح\n\n${lines}\n\n⚠️ ملف الدمج يُحذف من خدمة الدمج بعد ~24 ساعة — شاهده/نزّله سريعًا.`;
+  return `✅ تم دمج المقاطع بنجاح\n\n${lines}${via}\n\n⚠️ ملف الدمج يُحذف من خدمة الدمج بعد ~24 ساعة — شاهده/نزّله سريعًا.`;
+}
+
+/** اسم مقروء للمزود في ردود الأدوات */
+function providerDisplayName(p: TaskRow["provider"]): string {
+  switch (p) {
+    case "cloudflare":
+      return "Cloudflare Workers AI (مجاني)";
+    case "pollinations":
+      return "Pollinations (مجاني)";
+    case "kie":
+      return "kie.ai";
+    case "cometapi":
+      return "CometAPI";
+    case "merger":
+      return "خدمة الدمج";
+    default:
+      return String(p);
+  }
+}
+
+/**
+ * ملاحظة تُلحق بنتيجة ناجحة عند نجاح المهمة عبر مزود بديل بعد فشل مفاتيح
+ * Cloudflare (أو غيرها) قبلها — تجعل سبب التبديل شفافًا للعميل والمستخدم
+ * بدل أن يبدو التوليد عشوائي المزود.
+ */
+function fallbackNote(task: TaskRow): string {
+  try {
+    const attempts = JSON.parse(task.attempts_json || "[]") as AttemptRecord[];
+    const failedFree = attempts.filter((a) => !a.ok && a.provider === "cloudflare");
+    const succeeded = attempts.find((a) => a.ok);
+    if (failedFree.length === 0 || !succeeded || succeeded.provider === "cloudflare") return "";
+    const reasons = [...new Set(failedFree.map((a) => (a.error || "سبب غير معروف").slice(0, 100)))].join("؛ ");
+    return `\n\nℹ️ ملاحظة: نُفّذ عبر ${providerDisplayName(succeeded.provider)} لأن مفتاح/مفاتيح Cloudflare فشلت قبل ذلك (${reasons}). إن كانت التوكنات صالحة فأعد تفعيلها من لوحة الإدارة؛ وإلا أنشئ توكن Workers AI جديد من لوحة Cloudflare وأضفه بصيغة ACCOUNT_ID:API_TOKEN.`;
+  } catch {
+    return "";
+  }
 }
 
 export function formatProcessing(task: TaskRow): string {
@@ -174,15 +214,23 @@ function orderPoolByProvider(pool: ApiKeyRow[], providers: ProviderId[]): ApiKey
   return out;
 }
 
+/** توحيد اختيار المزود القادم من العميل: «kie.ai» تعني مزود kie، وتُتجاهل حالة الأحرف */
+export function normalizeProviderChoice(choice?: string): string {
+  const c = (choice ?? "").trim().toLowerCase();
+  if (c === "kie.ai" || c === "kieai" || c === "kie-ai") return "kie";
+  return c;
+}
+
 /**
  * مجمع المرشحين لأداة توليد: تفضيل مزود معين يقصر القائمة عليه، وإلا فالترتيب
  * الافتراضي للموديل (المجاني أولًا). يُستخدم في الإنشاء الأول وإعادة المحاولة
  * بعد الانقطاع حتى يبقى تفضيل العميل محفوظًا.
  */
 async function candidatePool(model: ModelDef, preferredProvider?: string): Promise<ApiKeyRow[]> {
+  const preferred = normalizeProviderChoice(preferredProvider);
   const wanted =
-    preferredProvider && preferredProvider !== "auto" && model.providers.includes(preferredProvider as ProviderId)
-      ? [preferredProvider as ProviderId]
+    preferred && preferred !== "auto" && model.providers.includes(preferred as ProviderId)
+      ? [preferred as ProviderId]
       : model.providers;
   const pool = await getKeyPool(wanted);
   return orderPoolByProvider(pool, wanted);
@@ -362,8 +410,8 @@ export async function runGeneration(opts: {
     return { kind: "invalid", text: "❌ معطيات غير صالحة: الوصف (prompt) مطلوب." };
   }
 
-  // المزود المفضل: يجب أن يكون مدعومًا لهذا الموديل
-  const preferred = opts.preferredProvider?.trim() || "auto";
+  // المزود المفضل: يجب أن يكون مدعومًا لهذا الموديل (نطبّع «kie.ai» إلى «kie»)
+  const preferred = normalizeProviderChoice(opts.preferredProvider) || "auto";
   if (preferred !== "auto" && !model.providers.includes(preferred as ProviderId)) {
     return {
       kind: "invalid",

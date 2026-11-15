@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic";
 // أقصى مدة دالة على خطة Vercel Hobby — نافذة الانتظار تُقصّ داخليًا عبر MCP_MAX_WAIT_SECONDS
 export const maxDuration = 60;
 
-const SERVER_INFO = { name: "media-generator-mcp", version: "1.2.0" } as const;
+const SERVER_INFO = { name: "media-generator-mcp", version: "1.3.0" } as const;
 
 const SERVER_INSTRUCTIONS = `AI media generation server (image: free Cloudflare Workers AI + free Pollinations first, then kie.ai + CometAPI; video: kie.ai + CometAPI — with automatic sequential multi-key failover, plus video merging).
 Workflow: call generate_image or generate_video. If the response contains finished URLs, show them to the user.
@@ -78,15 +78,15 @@ function buildServer(): McpServer {
     "generate_image",
     {
       description:
-        "Generate an image. Tries free Cloudflare Workers AI keys first, then free Pollinations, then kie.ai/CometAPI (automatic failover). Optional 'provider' argument forces a specific one. Returns the finished image URL if completed within the wait window, otherwise returns a task_id — then call get_task every ~10 seconds until completed, show the URL and stop.",
+        "Generate an image. Supported providers: Cloudflare Workers AI (free daily allowance), Pollinations (fully free, no key) and kie.ai + CometAPI (paid). Default priority tries every ACTIVE Cloudflare key sequentially first, then Pollinations, then kie.ai/CometAPI — automatic failover on any error or exhausted limit. Optional 'provider' argument forces a specific one. Returns the finished image URL if completed within the wait window, otherwise returns a task_id — then call get_task every ~10 seconds until completed, show the URL and stop.",
       inputSchema: {
         prompt: z.string().min(1).describe("What to draw. Detailed prompts give better results."),
         model: z.enum(imageModels as [string, ...string[]]).default("gpt-image-2-6/flare-text-to-image"),
         provider: z
-          .enum(["auto", "cloudflare", "pollinations", "kie", "cometapi"])
+          .enum(["auto", "cloudflare", "pollinations", "kie", "kie.ai", "cometapi"])
           .default("auto")
           .describe(
-            "Optional provider override. auto = free Cloudflare keys first, then Pollinations, then kie.ai/CometAPI. Use cloudflare for the free daily allowance, pollinations for a fully free no-key generation.",
+            "Optional provider override. auto = free Cloudflare Workers AI keys first (sequential), then Pollinations, then kie.ai/CometAPI. Use cloudflare for the free daily allowance, pollinations for a fully free no-key generation, 'kie' (also written 'kie.ai') for the paid provider.",
           ),
         aspect_ratio: z
           .enum(["auto", "1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "4:5", "16:9", "9:16", "2:1", "1:2", "21:9", "9:21", "3:1", "1:3"])
