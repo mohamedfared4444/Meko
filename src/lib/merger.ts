@@ -1,14 +1,17 @@
 /**
  * عميل خدمة دمج الفيديو — Video Merger API v2
- * العنوان من MERGER_API_BASE. بلا مفاتيح أو توثيق.
+ * العنوان من MERGER_API_BASE (معقّم عبر @/lib/env). بلا مفاتيح أو توثيق.
  * قيود مقاسة: 10 مقاطع كحد أقصى، 200MB لكل مصدر، 150MB للناتج، 600s مجموع المدد،
  * والملفات تُحذف تلقائيًا بعد 24 ساعة (expiresAt في الاستجابات).
  */
 
+import { sanitizeEnvValue } from "@/lib/env";
+
 const MAX_JOBS_TIMEOUT_MS = 150_000;
 
 export function mergerBase(): string | null {
-  const raw = (process.env.MERGER_API_BASE || "").trim().replace(/\/+$/, "");
+  // تعقيم الرابط من @/lib/env: مسافات + اقتباسات + أحرف غير مرئية (RTL/NBSP/BOM) تفسد fetch بـ«Invalid URL»
+  const raw = sanitizeEnvValue(process.env.MERGER_API_BASE).replace(/\/+$/, "");
   if (!raw || raw.includes("xxxxxxxx")) return null;
   return raw;
 }

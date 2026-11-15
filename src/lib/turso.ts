@@ -1,22 +1,56 @@
-import { createClient, type Client, type InValue } from "@libsql/client";
+// عميل Turso الويب (HTTP خالص عبر fetch) — يُستورد بمسار الملف مباشرة وليس باسم الحزمة:
+// Next.js يخترج اسم الحزمة "@libsql/client" افتراضيًا (قائمة server-external-packages)
+// ونسخ standalone للحزمة الخارجية ناقص (ملفات web.mjs/node.cjs و ws مفقودة) فيفشل التحميل
+// وقت التشغيل على serverless. الاستيراد المباشر للملف يجبر المُجمّع على تضمين السلسلة كاملة
+// داخل حزمة الدالة — بلا قراءة node_modules وقت التشغيل نهائيًا.
+import { createClient, type Client, type InValue } from "../../node_modules/@libsql/client/lib-esm/web.js";
+import { maskEnvValue, normalizeTursoUrl, sanitizeEnvValue } from "@/lib/env";
 import type { ApiKeyRow, AttemptRecord, MediaType, ProviderId, TaskRow, TaskStatus } from "./types";
 
 /**
- * طبقة قاعدة البيانات — Turso (libSQL) عبر HTTP.
- * عميل واحد مشترك + إنشاء المخطط تلقائيًا عند أول وصول (بلا أداة migrations)
+ * طبقة قاعدة البيانات — Turso (libSQL) عبر HTTP خالص (عميل الويب @libsql/client/web).
+ * لماذا عميل الويب؟ يستخدم fetch القياسي فقط بلا أي مكتبات أصلية (native) —
+ * يعمل بشكل مضمون داخل Vercel Serverless دون أخطاء Invalid URL أو فشل تحميل الوحدات.
+ *
+ * تعقيم المتغيرات قبل الاستخدام (وحدة @/lib/env المشتركة):
+ *  - trim: إزالة المسافات والأسطر الجديدة من الطرفين
+ *  - إزالة الاقتباسات المحيطة (خطأ شائع عند لصق القيمة داخل Vercel مع علامتي تنصيص)
+ *  - إزالة الأحرف غير المرئية: علامات الاتجاه RTL/LRM، المسافة الصفرية، NBSP، BOM —
+ *    تُدخل عند نسخ الرابط من محادثات وتجعل new URL() يرمي «Invalid URL»
+ *  - تحويل libsql:// إلى https:// تلقائيًا ليتوافق مع عميل الويب وبيئة Serverless
+ *
+ * عميل واحد مشترك + إنشاء المخطط تلقائيًا عند أول وصول (Auto-migrate بلا أداة migrations)
  * حتى تعمل على Vercel serverless بلا أي ملفات محلية.
  */
+
+// (تعقيم المتغيرات موحّد في @/lib/env)
+
+function getDatabaseUrl(): string {
+  const url = normalizeTursoUrl(process.env.TURSO_DATABASE_URL);
+  if (!url) {
+    throw new Error("TURSO_DATABASE_URL مفقود أو فارغ — أضفه في متغيرات البيئة (Vercel: Production) ثم أعد النشر.");
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error(
+      `صيغة رابط قاعدة البيانات غير صالحة (${maskEnvValue(url)}) — يجب أن يبدأ بـ libsql:// أو https://.`,
+    );
+  }
+  return url;
+}
+
+function getAuthToken(): string {
+  const token = sanitizeEnvValue(process.env.TURSO_AUTH_TOKEN);
+  if (!token) {
+    throw new Error("TURSO_AUTH_TOKEN مفقود أو فارغ — أضفه في متغيرات البيئة (Vercel: Production) ثم أعد النشر.");
+  }
+  return token;
+}
 
 let client: Client | null = null;
 
 export function getTurso(): Client {
   if (!client) {
-    const url = process.env.TURSO_DATABASE_URL;
-    const authToken = process.env.TURSO_AUTH_TOKEN;
-    if (!url || !authToken) {
-      throw new Error("TURSO_DATABASE_URL و TURSO_AUTH_TOKEN مطلوبان في متغيرات البيئة");
-    }
-    client = createClient({ url, authToken });
+    client = createClient({ url: getDatabaseUrl(), authToken: getAuthToken() });
   }
   return client;
 }
@@ -36,28 +70,34 @@ export function describeDbError(e: unknown): string {
 
   const msg = m.toLowerCase();
   // 1) متغيرات البيئة ناقصة (أشهر سبب بعد إضافة المتغيرات دون إعادة نشر)
-  if (!process.env.TURSO_DATABASE_URL || !process.env.TURSO_AUTH_TOKEN) {
+  if (!sanitizeEnvValue(process.env.TURSO_DATABASE_URL) || !sanitizeEnvValue(process.env.TURSO_AUTH_TOKEN)) {
     return "متغيرات البيئة TURSO_DATABASE_URL / TURSO_AUTH_TOKEN غير موجودة في هذه البيئة — أضفها في Vercel (Production) ثم أعد النشر.";
   }
-  // 2) فشل توثيق
+  // 2) صيغة الرابط (Invalid URL) — تُحل تلقائيًا بالتعقيم في الكود، لكن إن حدثت فالقيمة نفسها تالفة
+  if (/invalid url|url_invalid|not in a valid format|url scheme not supported|failed to parse/.test(msg)) {
+    return `صيغة TURSO_DATABASE_URL المضبوطة في Vercel تالفة (${maskEnvValue(
+      sanitizeEnvValue(process.env.TURSO_DATABASE_URL),
+    )}) — أعد لصقها بدون اقتباسات أو مسافات، وتأكد أنها تبدأ بـ libsql://. التفاصيل: ${m}`;
+  }
+  // 3) فشل توثيق
   if (/auth|unauthorized|401|forbidden|403|jwt|token.*invalid|invalid.*token|api key/.test(msg)) {
     return `فشل توثيق Turso — التوكن غير صالح أو منتهي الصلاحية. التفاصيل: ${m}`;
   }
-  // 3) مشكلات شبكة/DNS (شائعة في أول تشغيل بارد أو حجب شبكة)
+  // 4) مشكلات شبكة/DNS (شائعة في أول تشغيل بارد أو حجب شبكة)
   if (/fetch failed|enotfound|econnrefused|econnreset|etimedout|timeout|network|dns|getaddrinfo|socket hang up|h2 protocol error/.test(msg)) {
     return `تعذر الوصول لخادم Turso عبر الشبكة (مؤقت غالبًا — أعد المحاولة). التفاصيل: ${m}`;
   }
-  // 4) مشكلة تجميع/وحدات أصلية على serverless
+  // 5) مشكلة تجميع/وحدات أصلية على serverless
   if (/module not found|cannot find module|could not find|dynamic require|no such builtin|webassembly|native/.test(msg)) {
     return `فشل تحميل مشغّل قاعدة البيانات داخل بيئة الخادم (serverless). التفاصيل: ${m}`;
   }
-  // 5) أي شيء آخر — اعرض الرسبة المجزأة
+  // 6) أي شيء آخر — اعرض الرسبة المجزأة
   return `خطأ قاعدة البيانات: ${m}`;
 }
 
 let schemaPromise: Promise<void> | null = null;
 
-/** إنشاء الجداول عند أول وصول — CREATE TABLE IF NOT EXISTS */
+/** إنشاء الجداول عند أول وصول — CREATE TABLE IF NOT EXISTS (Auto-migrate) */
 export function ensureSchema(): Promise<void> {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -310,7 +350,7 @@ export async function deleteTasks(ids: string[]): Promise<number> {
  */
 function envKeyRow(provider: ProviderId): ApiKeyRow | null {
   const envName = provider === "kie" ? "KIE_API_KEY" : "COMETAPI_API_KEY";
-  const value = process.env[envName]?.trim();
+  const value = sanitizeEnvValue(process.env[envName]);
   if (!value) return null;
   return {
     id: `env-${provider}`,

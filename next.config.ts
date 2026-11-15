@@ -3,8 +3,9 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   output: "standalone",
   /* config options here */
-  // إبقاء مشغّل libsql الأصلي خارج حزمة serverless — تجميعه يكسر الاتصال بقاعدة Turso على Vercel
-  serverExternalPackages: ["@libsql/client", "libsql"],
+  // عميل Turso يُستورد بمسار الملف مباشرة (src/lib/turso.ts) فيُجمَّع كاملًا داخل حزمة
+  // serverless — تخريج Next الافتراضي لاسم الحزمة ينسخ node_modules ناقصًا في standalone
+  // ويفشل وقت التشغيل، لذا لا نعتمد عليه إطلاقًا.
   typescript: {
     ignoreBuildErrors: true,
   },
