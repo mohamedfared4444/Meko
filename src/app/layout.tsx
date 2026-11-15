@@ -24,7 +24,7 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body className="antialiased bg-slate-950 text-slate-100 [font-family:Cairo,ui-sans-serif,system-ui,'Segoe_UI',sans-serif]">
+      <body className="antialiased bg-[#050507] text-white [font-family:Cairo,ui-sans-serif,system-ui,'Segoe_UI',sans-serif]">
         {children}
       </body>
     </html>
