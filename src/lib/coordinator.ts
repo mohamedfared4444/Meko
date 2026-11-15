@@ -129,13 +129,14 @@ export function formatCompleted(task: TaskRow): string {
     ? `\n\nالمنفّذ: ${providerDisplayName(task.provider)}`
     : "";
   const note = [fallbackNote(task), skippedNoteFromParams(task)].filter(Boolean).join("\n\n");
+  const noteBlock = note ? `\n\n${note}` : "";
   if (task.type === "image") {
     const first = urls[0] ?? "";
-    return `✅ تم توليد الصورة بنجاح\n\n![image](${first})\n\nالرابط المباشر: ${first}${via}${note}`;
+    return `✅ تم توليد الصورة بنجاح\n\n![image](${first})\n\nالرابط المباشر: ${first}${via}${noteBlock}`;
   }
   if (task.type === "video") {
     const lines = urls.map((u) => `الرابط المباشر: ${u}`).join("\n");
-    return `✅ تم توليد الفيديو بنجاح\n\n${lines}${via}${note}`;
+    return `✅ تم توليد الفيديو بنجاح\n\n${lines}${via}${noteBlock}`;
   }
   const lines = urls.map((u) => `الرابط المباشر: ${u}`).join("\n");
   return `✅ تم دمج المقاطع بنجاح\n\n${lines}${via}\n\n⚠️ ملف الدمج يُحذف من خدمة الدمج بعد ~24 ساعة — شاهده/نزّله سريعًا.`;
