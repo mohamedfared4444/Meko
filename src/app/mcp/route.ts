@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic";
 // أقصى مدة دالة على خطة Vercel Hobby — نافذة الانتظار تُقصّ داخليًا عبر MCP_MAX_WAIT_SECONDS
 export const maxDuration = 60;
 
-const SERVER_INFO = { name: "media-generator-mcp", version: "1.3.0" } as const;
+const SERVER_INFO = { name: "media-generator-mcp", version: "1.3.1" } as const;
 
 const SERVER_INSTRUCTIONS = `AI media generation server (image: free Cloudflare Workers AI + free Pollinations first, then kie.ai + CometAPI; video: kie.ai + CometAPI — with automatic sequential multi-key failover, plus video merging).
 Workflow: call generate_image or generate_video. If the response contains finished URLs, show them to the user.

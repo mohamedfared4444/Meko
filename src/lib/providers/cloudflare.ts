@@ -22,10 +22,26 @@ import { ProviderHttpError, type ProviderAdapter } from "./types-adapter";
  * إلى مضيف صور مجاني (catbox.moe ثم 0x0.st ثم litterbox كاحتياط) ويُعاد رابط
  * مباشر بنفس صيغة روابط الصور المعتمدة في بقية المزودات. فشل الرفع يُعامل
  * كخطأ مؤقت فينتقل التوليد تلقائيًا للمفتاح/المزود التالي.
+ *
+ * ميزانية زمنية صارمة (SYNC_BUDGET_MS ≈ 45 ثانية للعملية المتزامنة كلها):
+ * التوليد المتزامن يجري داخل نداء generate_image نفسه على Vercel (حد الدالة
+ * 60 ثانية) — لو تجاوز النداء الحد تُقتل الدالة قبل تحديث المهمة في Turso
+ * فتبقى عالقة عند 0%. لذا مهلة التوليد 25 ثانية (flux-1-schnell يستغرق
+ * ثوانٍ معدودة) والرفع يشترك معه في الميزانية المتبقية بمهلة 12 ثانية
+ * كحد أقصى لكل مضيف.
  */
 
 const CF_BASE = "https://api.cloudflare.com/client/v4";
 const FLUX_MODEL_DEFAULT = "@cf/black-forest-labs/flux-1-schnell";
+
+/** ميزانية العملية المتزامنة كلها (توليد + رفع) — أقل من حد Vercel 60 ثانية بهامش آمن */
+const SYNC_BUDGET_MS = 45_000;
+/** مهلة نداء التوليد — flux-1-schnell سريع وثوانٍ معدودة تكفيه بفضل */
+const GENERATION_TIMEOUT_MS = 25_000;
+/** أقصى مهلة لرفع الصورة إلى مضيف واحد */
+const UPLOAD_TIMEOUT_MS = 12_000;
+/** أقل مهلة مفيدة للرفع — أقل من ذلك تعني نفاد الميزانية فلا مجد للمحاولة */
+const MIN_USEFUL_TIMEOUT_MS = 2_500;
 
 /** نوع المصادقة: توكن Bearer أو مفتاح API العام القديم (X-Auth-Email / X-Auth-Key) */
 type CloudflareAuth =
@@ -123,14 +139,20 @@ function withTimeout(ms: number): { signal: AbortSignal; done: () => void } {
 /**
  * رفع الصورة إلى مضيف مجاني وإعادة رابط مباشر — يجرّب المضيفين بالترتيب:
  * catbox.moe (دائم) → 0x0.st (شهر فأكثر) → litterbox (24 ساعة)
+ * مهلة كل مضيف تنقص من الميزانية المتبقية للعملية المتزامنة حتى لا نتجاوز
+ * حد دالة Vercel وتُقتل قبل تحديث المهمة في قاعدة البيانات.
  */
-async function uploadImage(bytes: Uint8Array, contentType: string): Promise<string> {
+async function uploadImage(bytes: Uint8Array, contentType: string, remainingMs: () => number): Promise<string> {
   const ext = extForType(contentType);
   const filename = `meko-${Date.now()}.${ext}`;
 
   // 1) catbox.moe — روابط دائمة
   {
-    const { signal, done } = withTimeout(30_000);
+    const budget = Math.min(UPLOAD_TIMEOUT_MS, remainingMs());
+    if (budget < MIN_USEFUL_TIMEOUT_MS) {
+      throw new ProviderHttpError("نفدت الميزانية الزمنية قبل رفع صورة Cloudflare — جرّب مزودًا آخر", 504);
+    }
+    const { signal, done } = withTimeout(budget);
     try {
       const form = new FormData();
       form.append("reqtype", "fileupload");
@@ -147,7 +169,11 @@ async function uploadImage(bytes: Uint8Array, contentType: string): Promise<stri
 
   // 2) 0x0.st — احتفظ طويل
   {
-    const { signal, done } = withTimeout(30_000);
+    const budget = Math.min(UPLOAD_TIMEOUT_MS, remainingMs());
+    if (budget < MIN_USEFUL_TIMEOUT_MS) {
+      throw new ProviderHttpError("نفدت الميزانية الزمنية قبل رفع صورة Cloudflare — جرّب مزودًا آخر", 504);
+    }
+    const { signal, done } = withTimeout(budget);
     try {
       const form = new FormData();
       form.append("file", new Blob([bytes as BlobPart], { type: contentType }), filename);
@@ -168,7 +194,11 @@ async function uploadImage(bytes: Uint8Array, contentType: string): Promise<stri
 
   // 3) litterbox — مؤقت 24 ساعة (احتياط أخير)
   {
-    const { signal, done } = withTimeout(30_000);
+    const budget = Math.min(UPLOAD_TIMEOUT_MS, remainingMs());
+    if (budget < MIN_USEFUL_TIMEOUT_MS) {
+      throw new ProviderHttpError("نفدت الميزانية الزمنية قبل رفع صورة Cloudflare — جرّب مزودًا آخر", 504);
+    }
+    const { signal, done } = withTimeout(budget);
     try {
       const form = new FormData();
       form.append("reqtype", "fileupload");
@@ -201,8 +231,14 @@ export const cloudflareAdapter: ProviderAdapter = {
       throw new ProviderHttpError("الوصف (prompt) مطلوب لمزود Cloudflare Workers AI", 400);
     }
 
+    // ميزانية زمنية للعملية المتزامنة كلها (توليد + رفع) — لو تجاوزناها تُقتل
+    // دالة Vercel قبل تحديث المهمة في Turso فتبقى عالقة عند 0% بلا نتيجة
+    const startedAt = Date.now();
+    const remainingMs = () => SYNC_BUDGET_MS - (Date.now() - startedAt);
+
     // 1) نداء التوليد — الهيدرات حسب نوع المفتاح: Bearer أو X-Auth-Email/X-Auth-Key
-    const genTimer = withTimeout(90_000);
+    const genBudget = Math.max(5_000, Math.min(GENERATION_TIMEOUT_MS, remainingMs()));
+    const genTimer = withTimeout(genBudget);
     let res: Response;
     try {
       res = await fetch(`${CF_BASE}/accounts/${encodeURIComponent(creds.accountId)}/ai/run/${model}`, {
@@ -246,11 +282,24 @@ export const cloudflareAdapter: ProviderAdapter = {
       try {
         body = JSON.parse(text) as Record<string, unknown>;
       } catch {
-        /* جسم غير JSON — يُعالج أدناه كفشل HTTP */
+        /* جسم غير JSON — يُعالج أدناه كفشل HTTP بمقتطف الجسم الخام */
       }
       const success = body.success === true;
       const errors = body.errors as Array<{ message?: string; code?: number }> | undefined;
-      const errMsg = Array.isArray(errors) && errors.length > 0 ? errors.map((x) => x.message ?? String(x.code)).join("; ") : "";
+      // الخطأ الحقيقي القادم من Cloudflare API يُستخرج بأي صيغة معروفة — هذا
+      // النص هو ما يُسجل لاحقًا في last_error للمفتاح (شفافية التشخيص)
+      let errMsg = Array.isArray(errors) && errors.length > 0 ? errors.map((x) => x.message ?? String(x.code)).join("; ") : "";
+      if (!errMsg) {
+        // صيغ بديلة تُعيد بعض نقاط Cloudflare: {"error": "نص"} أو {"error": {"message": "نص"}}
+        const alt = body.error as { message?: string } | string | undefined;
+        if (typeof alt === "string") errMsg = alt;
+        else if (alt && typeof alt === "object" && typeof alt.message === "string") errMsg = alt.message;
+      }
+      if (!errMsg && !res.ok) {
+        // لا رسالة مهيكلة — أدرج مقتطفًا من الجسم الخام حتى لا يُفقد النص الحقيقي للخطأ
+        const snippet = text.trim().replace(/\s+/g, " ").slice(0, 180);
+        errMsg = snippet ? `HTTP ${res.status} من Cloudflare: ${snippet}` : "";
+      }
 
       if (!res.ok) throw new ProviderHttpError(errMsg || `HTTP ${res.status} من Cloudflare`, res.status);
       if (!success || errMsg) throw new ProviderHttpError(errMsg || "استجابة Cloudflare بلا نجاح", res.status || 502);
@@ -275,7 +324,7 @@ export const cloudflareAdapter: ProviderAdapter = {
     // 3) رفع الصورة وتحويلها إلى رابط مباشر بنفس صيغة المشروع
     //    (نستخدم magic bytes لتحديد النوع، ومع fallback الافتراضي PNG لناتج flux)
     const finalType = sniffImageType(imageBytes) ?? "image/png";
-    const url = await uploadImage(imageBytes, finalType);
+    const url = await uploadImage(imageBytes, finalType, remainingMs);
     return { urls: [url] };
   },
 

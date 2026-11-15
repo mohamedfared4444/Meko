@@ -130,16 +130,18 @@ export function formatCompleted(task: TaskRow): string {
     : "";
   const note = [fallbackNote(task), skippedNoteFromParams(task)].filter(Boolean).join("\n\n");
   const noteBlock = note ? `\n\n${note}` : "";
+  // task_id يظهر دائمًا بجانب الروابط — المرجع للتتبع لاحقًا بـ get_task / list_media
+  const tid = `\n\ntask_id: ${task.id}`;
   if (task.type === "image") {
     const first = urls[0] ?? "";
-    return `✅ تم توليد الصورة بنجاح\n\n![image](${first})\n\nالرابط المباشر: ${first}${via}${noteBlock}`;
+    return `✅ تم توليد الصورة بنجاح\n\n![image](${first})\n\nالرابط المباشر: ${first}${tid}${via}${noteBlock}`;
   }
   if (task.type === "video") {
     const lines = urls.map((u) => `الرابط المباشر: ${u}`).join("\n");
-    return `✅ تم توليد الفيديو بنجاح\n\n${lines}${via}${noteBlock}`;
+    return `✅ تم توليد الفيديو بنجاح\n\n${lines}${tid}${via}${noteBlock}`;
   }
   const lines = urls.map((u) => `الرابط المباشر: ${u}`).join("\n");
-  return `✅ تم دمج المقاطع بنجاح\n\n${lines}${via}\n\n⚠️ ملف الدمج يُحذف من خدمة الدمج بعد ~24 ساعة — شاهده/نزّله سريعًا.`;
+  return `✅ تم دمج المقاطع بنجاح\n\n${lines}${tid}${via}\n\n⚠️ ملف الدمج يُحذف من خدمة الدمج بعد ~24 ساعة — شاهده/نزّله سريعًا.`;
 }
 
 /** اسم مقروء للمزود في ردود الأدوات */
@@ -206,6 +208,36 @@ function skippedNoteFromParams(task: TaskRow): string {
   } catch {
     return "";
   }
+}
+
+/**
+ * آخر خطأ حقيقي من سجل المحاولات (attempts_json) — يُستخدم عند الفشل النهائي
+ * بعد نفاد كل المفاتيح لتوضيح سبب الفشل في رسالة المهمة بدل «بانتظار مفتاح»
+ * الغامضة التي تعلق المهمة على 0% بلا تفسير.
+ */
+export function lastFailedAttemptError(task: Pick<TaskRow, "attempts_json">): string {
+  try {
+    const attempts = JSON.parse(task.attempts_json || "[]") as AttemptRecord[];
+    const failed = attempts.filter((a) => !a.ok);
+    return failed.length > 0 ? failed[failed.length - 1].error || "" : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * رسالة الفشل النهائي عند نفاد كل المفاتيح القابلة للتجربة — تحل محل سلوك
+ * «بانتظار توفر مفتاح صالح…» الأبدي الذي كان يترك المهمة عالقة عند 0% إلى
+ * الأبد دون فشل صريح، رغم استحالة اكتمالها أصلًا (كل المفاتيح عُطّلت).
+ * تتضمن مقتطفًا من الخطأ الحقيقي القادم من المزود (نفس الشفافية المعتمدة
+ * في fallbackNote) لتصل الرسالة الكاملة لعميل MCP ولقاعدة البيانات.
+ */
+export function terminalNoKeysMessage(lastError: string): string {
+  const tail = lastError ? ` آخر خطأ من المزود: ${lastError.slice(0, 160)}` : "";
+  return (
+    "فشل إنشاء التوليد نهائيًا — جميع المفاتيح المتاحة للموديل فشلت وعُطّلت ولم يعد أي مفتاح نشطًا لإعادة المحاولة." +
+    `${tail} أضف مفتاحًا صالحًا أو أعد تفعيل المفاتيح من لوحة الإدارة ثم أنشئ مهمة جديدة.`
+  );
 }
 
 export function formatProcessing(task: TaskRow): string {
@@ -508,6 +540,14 @@ export async function runGeneration(opts: {
       await updateTask(taskId, { status: "failed", error_message: msg });
       return { kind: "failed", taskId, text: `❌ فشلت المهمة: ${msg}` };
     }
+    // لم يعد أي مفتاح نشطًا بعد فشل كل المحاولات (عُطّلت أثناءها) → الفشل النهائي
+    // الصريح فورًا بدل ترك المهمة معلقة عند 0% بانتظار مفتاح لن يأتي أبدًا
+    const remaining = await candidatePool(model, preferred);
+    if (remaining.length === 0) {
+      const msg = terminalNoKeysMessage(run.lastError?.replace(/^\[[a-z]+\]\s*/i, "") ?? "");
+      await updateTask(taskId, { status: "failed", error_message: msg, progress: 0 });
+      return { kind: "failed", taskId, text: `❌ فشلت المهمة: ${msg}` };
+    }
     // فشل الإنشاء على كل المفاتيح ← تبقى processing وبانتظار مفتاح صالح (قاعدة 4.3.3)
     const nextAt = Date.now() + RECREATE_COOLDOWN_MS;
     await updateTask(taskId, {
@@ -583,6 +623,11 @@ async function waitWindow(
         if (run.paramsError) {
           return { kind: "failed", error: run.lastError?.replace(/^\[params\]\s*/, "") || "خطأ معطيات" };
         }
+        // نفدت كل المفاتيح النشطة أثناء إعادة الإنشاء → فشل نهائي بدل انتظار أبدي
+        const remaining = await candidatePool(model, parseParams<{ preferredProvider?: string }>(task).preferredProvider);
+        if (remaining.length === 0) {
+          return { kind: "failed", error: terminalNoKeysMessage(run.lastError?.replace(/^\[[a-z]+\]\s*/i, "") || lastFailedAttemptError(task)) };
+        }
         await updateTask(taskId, {
           params_json: JSON.stringify({ ...parseParams(task), nextAttemptAt: Date.now() + RECREATE_COOLDOWN_MS }),
           error_message: "بانتظار توفر مفتاح صالح…",
@@ -633,6 +678,13 @@ export async function refreshTask(taskId: string): Promise<RunOutcome> {
   // مهمة بلا معرّف مزود: لم ينجح الإنشاء بعد — أعد المحاولة بعد فترة تهدئة 45 ثانية
   if (!task.provider_task_id) {
     const params = parseParams<{ nextAttemptAt?: number; preferredProvider?: string }>(task);
+    // لا مفاتيح نشطة إطلاقًا → فشل نهائي فوري بدل انتظار أبدي عالق عند 0%
+    const poolNow = await candidatePool(model, params.preferredProvider);
+    if (poolNow.length === 0) {
+      const msg = terminalNoKeysMessage(lastFailedAttemptError(task));
+      await updateTask(taskId, { status: "failed", error_message: msg, progress: 0 });
+      return { kind: "failed", taskId, text: `❌ فشلت المهمة: ${msg}` };
+    }
     if ((params.nextAttemptAt ?? 0) > Date.now()) {
       const fresh = (await getTask(taskId))!;
       return { kind: "processing", taskId, progress: fresh.progress, text: formatProcessing(fresh) + "\n\n(بانتظار توفر مفتاح صالح — تجري إعادة المحاولة تلقائيًا)" };
@@ -640,6 +692,13 @@ export async function refreshTask(taskId: string): Promise<RunOutcome> {
     const candidates = await candidatePool(model, params.preferredProvider);
     const run = await tryCandidates(task, model, buildInputFromParams(model, task), candidates, 0);
     if (!run.ok) {
+      // فشلت إعادة المحاولة وعُطّلت بقية المفاتيح؟ → فشل نهائي بدل حلقة انتظار لا تنتهي
+      const remaining = await candidatePool(model, params.preferredProvider);
+      if (remaining.length === 0) {
+        const msg = terminalNoKeysMessage(run.lastError?.replace(/^\[[a-z]+\]\s*/i, "") || lastFailedAttemptError(task));
+        await updateTask(taskId, { status: "failed", error_message: msg, progress: 0 });
+        return { kind: "failed", taskId, text: `❌ فشلت المهمة: ${msg}` };
+      }
       await updateTask(taskId, {
         params_json: JSON.stringify({ ...parseParams(task), nextAttemptAt: Date.now() + RECREATE_COOLDOWN_MS }),
         error_message: "بانتظار توفر مفتاح صالح…",
@@ -671,6 +730,13 @@ export async function refreshTask(taskId: string): Promise<RunOutcome> {
     const candidates = await candidatePool(model, parseParams<{ preferredProvider?: string }>(task).preferredProvider);
     const run = await tryCandidates(task, model, buildInputFromParams(model, task), candidates, 0);
     if (!run.ok) {
+      // نفدت كل المفاتيح النشطة أثناء إعادة الإنشاء → فشل نهائي بدل حلقة انتظار لا تنتهي
+      const remaining = await candidatePool(model, parseParams<{ preferredProvider?: string }>(task).preferredProvider);
+      if (remaining.length === 0) {
+        const msg = terminalNoKeysMessage(run.lastError?.replace(/^\[[a-z]+\]\s*/i, "") || lastFailedAttemptError(task));
+        await updateTask(taskId, { status: "failed", error_message: msg, progress: 0 });
+        return { kind: "failed", taskId, text: `❌ فشلت المهمة: ${msg}` };
+      }
       await updateTask(taskId, {
         params_json: JSON.stringify({ ...parseParams(task), nextAttemptAt: Date.now() + RECREATE_COOLDOWN_MS }),
         error_message: "بانتظار توفر مفتاح صالح…",
@@ -706,13 +772,31 @@ async function singleCheckAfterCreate(taskId: string, model: ModelDef): Promise<
     return { kind: "failed", taskId, text: formatFailed(fresh) };
   }
   if (step.action === "recreate") {
-    // فشل فوري بعد الإنشاء بسبب مفتاح/رصيد — نجدول إعادة المحاولة عند get_task التالي
-    await updateTask(taskId, {
-      params_json: JSON.stringify({ ...parseParams(task), nextAttemptAt: Date.now() + RECREATE_COOLDOWN_MS }),
-      provider_task_id: null,
-      key_id: null,
-      error_message: "بانتظار توفر مفتاح صالح…",
-    });
+    // فشل فوري بعد الإنشاء بسبب مفتاح/رصيد — أعد الإنشاء فورًا على المفتاح التالي
+    const candidates = await candidatePool(model, parseParams<{ preferredProvider?: string }>(task).preferredProvider);
+    const run = await tryCandidates(task, model, buildInputFromParams(model, task), candidates, 0);
+    if (!run.ok) {
+      // نفدت كل المفاتيح النشطة → فشل نهائي صريح بدل إعادة جدولة انتظار أبدي عند 0%
+      const remaining = await candidatePool(model, parseParams<{ preferredProvider?: string }>(task).preferredProvider);
+      if (remaining.length === 0) {
+        const msg = terminalNoKeysMessage(run.lastError?.replace(/^\[[a-z]+\]\s*/i, "") || lastFailedAttemptError(task));
+        await updateTask(taskId, { status: "failed", error_message: msg, progress: 0 });
+        return { kind: "failed", taskId, text: `❌ فشلت المهمة: ${msg}` };
+      }
+      await updateTask(taskId, {
+        params_json: JSON.stringify({ ...parseParams(task), nextAttemptAt: Date.now() + RECREATE_COOLDOWN_MS }),
+        provider_task_id: null,
+        key_id: null,
+        error_message: "بانتظار توفر مفتاح صالح…",
+      });
+      const fresh = (await getTask(taskId))!;
+      return { kind: "processing", taskId, progress: fresh.progress, text: formatProcessing(fresh) };
+    }
+    // نجحت إعادة الإنشاء: صورة متزامنة اكتملت فورًا أو مهمة مزود جديدة بنفس task_id
+    if (run.created?.syncUrls) {
+      const fresh = (await getTask(taskId))!;
+      return { kind: "completed", taskId, urls: run.created.syncUrls, text: formatCompleted(fresh) };
+    }
     const fresh = (await getTask(taskId))!;
     return { kind: "processing", taskId, progress: fresh.progress, text: formatProcessing(fresh) };
   }
