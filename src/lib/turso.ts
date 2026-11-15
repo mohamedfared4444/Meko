@@ -21,6 +21,40 @@ export function getTurso(): Client {
   return client;
 }
 
+/**
+ * تحويل أي فشل في الاتصال بقاعدة Turso إلى رسالة تشخيصية عربية واضحة —
+ * تُعرض في /api/health وفي الواجهة لمعرفة السبب الحقيقي بدل «غير متصل» الصامتة.
+ * لا تُسرّب التوكن أبدًا (تُقنّع إن ظهرت داخل رسالة المكتبة).
+ */
+export function describeDbError(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e);
+  let m = raw;
+  // قنّع التوكن إن ظهر نصه الكامل في رسالة الخطأ
+  const token = process.env.TURSO_AUTH_TOKEN;
+  if (token && m.includes(token)) m = m.replaceAll(token, "***TOKEN***");
+  m = m.length > 220 ? m.slice(0, 220) + "…" : m;
+
+  const msg = m.toLowerCase();
+  // 1) متغيرات البيئة ناقصة (أشهر سبب بعد إضافة المتغيرات دون إعادة نشر)
+  if (!process.env.TURSO_DATABASE_URL || !process.env.TURSO_AUTH_TOKEN) {
+    return "متغيرات البيئة TURSO_DATABASE_URL / TURSO_AUTH_TOKEN غير موجودة في هذه البيئة — أضفها في Vercel (Production) ثم أعد النشر.";
+  }
+  // 2) فشل توثيق
+  if (/auth|unauthorized|401|forbidden|403|jwt|token.*invalid|invalid.*token|api key/.test(msg)) {
+    return `فشل توثيق Turso — التوكن غير صالح أو منتهي الصلاحية. التفاصيل: ${m}`;
+  }
+  // 3) مشكلات شبكة/DNS (شائعة في أول تشغيل بارد أو حجب شبكة)
+  if (/fetch failed|enotfound|econnrefused|econnreset|etimedout|timeout|network|dns|getaddrinfo|socket hang up|h2 protocol error/.test(msg)) {
+    return `تعذر الوصول لخادم Turso عبر الشبكة (مؤقت غالبًا — أعد المحاولة). التفاصيل: ${m}`;
+  }
+  // 4) مشكلة تجميع/وحدات أصلية على serverless
+  if (/module not found|cannot find module|could not find|dynamic require|no such builtin|webassembly|native/.test(msg)) {
+    return `فشل تحميل مشغّل قاعدة البيانات داخل بيئة الخادم (serverless). التفاصيل: ${m}`;
+  }
+  // 5) أي شيء آخر — اعرض الرسبة المجزأة
+  return `خطأ قاعدة البيانات: ${m}`;
+}
+
 let schemaPromise: Promise<void> | null = null;
 
 /** إنشاء الجداول عند أول وصول — CREATE TABLE IF NOT EXISTS */

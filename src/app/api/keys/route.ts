@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
-import { findDuplicateKey, insertApiKey, listApiKeys } from "@/lib/turso";
+import { describeDbError, findDuplicateKey, insertApiKey, listApiKeys } from "@/lib/turso";
 import { maskKey } from "@/lib/errors";
 import type { ProviderId } from "@/lib/types";
 
@@ -9,23 +9,29 @@ export const dynamic = "force-dynamic";
 
 /** عرض المفاتيح كاملة الترتيب — مقنّعة دائمًا، لا يُعاد المفتاح الكامل في أي استجابة */
 export async function GET() {
-  const keys = await listApiKeys();
-  return NextResponse.json({
-    keys: keys.map((k) => ({
-      id: k.id,
-      provider: k.provider,
-      label: k.label,
-      masked: maskKey(k.api_key),
-      status: k.status,
-      usage_count: k.usage_count,
-      success_count: k.success_count,
-      fail_count: k.fail_count,
-      last_used_at: k.last_used_at,
-      last_checked_at: k.last_checked_at,
-      last_error: k.last_error,
-      created_at: k.created_at,
-    })),
-  });
+  try {
+    const keys = await listApiKeys();
+    return NextResponse.json({
+      keys: keys.map((k) => ({
+        id: k.id,
+        provider: k.provider,
+        label: k.label,
+        masked: maskKey(k.api_key),
+        status: k.status,
+        usage_count: k.usage_count,
+        success_count: k.success_count,
+        fail_count: k.fail_count,
+        last_used_at: k.last_used_at,
+        last_checked_at: k.last_checked_at,
+        last_error: k.last_error,
+        created_at: k.created_at,
+      })),
+    });
+  } catch (e) {
+    const detail = describeDbError(e);
+    console.error("[keys:GET]", detail);
+    return NextResponse.json({ error: "فشل قراءة المفاتيح من قاعدة البيانات.", detail }, { status: 503 });
+  }
 }
 
 /** إضافة مفتاح — مع رفض التكرار لنفس المزود */
@@ -48,25 +54,31 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "المفتاح مطلوب (8 أحرف على الأقل)." }, { status: 400 });
   }
 
-  const dup = await findDuplicateKey(provider, apiKey);
-  if (dup) {
-    return NextResponse.json(
-      { error: `هذا المفتاح مضاف مسبقًا لنفس المزود (${maskKey(apiKey)}).` },
-      { status: 409 },
-    );
-  }
+  try {
+    const dup = await findDuplicateKey(provider, apiKey);
+    if (dup) {
+      return NextResponse.json(
+        { error: `هذا المفتاح مضاف مسبقًا لنفس المزود (${maskKey(apiKey)}).` },
+        { status: 409 },
+      );
+    }
 
-  const created = await insertApiKey({ id: randomUUID(), provider, label, api_key: apiKey });
-  return NextResponse.json(
-    {
-      key: {
-        id: created.id,
-        provider: created.provider,
-        label: created.label,
-        masked: maskKey(created.api_key),
-        status: created.status,
+    const created = await insertApiKey({ id: randomUUID(), provider, label, api_key: apiKey });
+    return NextResponse.json(
+      {
+        key: {
+          id: created.id,
+          provider: created.provider,
+          label: created.label,
+          masked: maskKey(created.api_key),
+          status: created.status,
+        },
       },
-    },
-    { status: 201 },
-  );
+      { status: 201 },
+    );
+  } catch (e) {
+    const detail = describeDbError(e);
+    console.error("[keys:POST]", detail);
+    return NextResponse.json({ error: "تعذر حفظ المفتاح — فشل الاتصال بقاعدة بيانات Turso.", detail }, { status: 503 });
+  }
 }

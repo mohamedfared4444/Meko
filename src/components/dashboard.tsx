@@ -17,6 +17,7 @@ import { toast } from "sonner";
 interface HealthInfo {
   ok: boolean;
   database: string;
+  dbError?: string | null;
   mcpEndpoint: string;
   models: Array<{ canonical: string; type: string; providers: string[] }>;
   merger: { base: string; healthy: boolean };
@@ -106,6 +107,7 @@ async function copyText(text: string, okMsg: string) {
 
 export default function Dashboard() {
   const [health, setHealth] = useState<HealthInfo | null>(null);
+  const [healthOffline, setHealthOffline] = useState(false);
   const [keys, setKeys] = useState<KeyItem[]>([]);
   const [tasksData, setTasksData] = useState<TasksResponse | null>(null);
   const [mcpUrl, setMcpUrl] = useState("");
@@ -121,8 +123,11 @@ export default function Dashboard() {
       const r = await fetch("/api/health", { cache: "no-store" });
       const j = (await r.json()) as HealthInfo;
       setHealth(j);
+      setHealthOffline(false);
     } catch {
+      // فشل الشبكة نفسها — يظهر في الشارة كحالة فحص/انقطاع مع سبب في صندوق التشخيص أدناه
       setHealth(null);
+      setHealthOffline(true);
     }
   }, []);
 
@@ -175,17 +180,26 @@ export default function Dashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider, api_key: apiKey.trim(), label: label.trim() }),
       });
-      const j = (await r.json()) as { error?: string };
+      // قراءة آمنة للاستجابة: JSON متوقع، لكن أي جسم آخر (مثل صفحة خطأ 5xx) لا يُخفي السبب
+      const text = await r.text();
+      let j: { error?: string; detail?: string } = {};
+      try {
+        j = JSON.parse(text) as { error?: string; detail?: string };
+      } catch {
+        j = { error: `استجابة غير متوقعة من الخادم (HTTP ${r.status}).` };
+      }
       if (!r.ok) {
-        toast.error(j.error ?? "فشل إضافة المفتاح.");
+        const base = j.error ?? "فشل إضافة المفتاح.";
+        toast.error(j.detail ? base + "\n" + j.detail : base, { duration: 8000 });
       } else {
         toast.success("أُضيف المفتاح — سيُجرَّب أولًا حسب ترتيب الإضافة.");
         setApiKey("");
         setLabel("");
         await loadKeys();
       }
-    } catch {
-      toast.error("تعذر الاتصال بالخادم.");
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      toast.error(`تعذر الاتصال بالخادم — تحقق من الشبكة. (${reason})`, { duration: 8000 });
     } finally {
       setBusy(false);
     }
@@ -258,7 +272,11 @@ export default function Dashboard() {
           </div>
           <div className="flex items-center gap-2">
             {health === null ? (
-              <Badge className="rounded-full px-3 bg-white/[0.07] text-white/70 border border-white/[0.12]">جارٍ الفحص…</Badge>
+              healthOffline ? (
+                <Badge className="rounded-full px-3 bg-red-500/[0.12] text-red-300 border border-red-400/25">غير متصل</Badge>
+              ) : (
+                <Badge className="rounded-full px-3 bg-white/[0.07] text-white/70 border border-white/[0.12]">جارٍ الفحص…</Badge>
+              )
             ) : health.ok ? (
               <Badge className="rounded-full px-3 bg-emerald-500/[0.12] text-emerald-300 border border-emerald-400/25">Turso متصل</Badge>
             ) : (
@@ -284,6 +302,17 @@ export default function Dashboard() {
 
       {/* ===================== المحتوى ===================== */}
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 sm:px-6 py-6 sm:py-8 space-y-5 sm:space-y-6">
+
+        {/* تشخيص فشل الاتصال — يعرض السبب الحقيقي من الخادم بدل رسالة صامتة */}
+        {health && !health.ok && (
+          <div className="rounded-2xl border border-red-400/25 bg-red-500/[0.08] p-4 text-[13px] leading-relaxed text-red-200">
+            <p className="font-semibold mb-1.5">تعذر الاتصال بقاعدة بيانات Turso — السبب من الخادم:</p>
+            <p dir="auto" className="break-words text-red-200/85">{health.dbError || health.database}</p>
+            <p className="mt-2 text-[11px] text-red-200/60">
+              تحقق من متغيرات البيئة في Vercel (TURSO_DATABASE_URL و TURSO_AUTH_TOKEN لبيئة Production) ثم أعد النشر.
+            </p>
+          </div>
+        )}
         <div className="grid grid-cols-1 gap-5 sm:gap-6 lg:grid-cols-2 items-start">
           {/* ---------- أ) مدير المفاتيح ---------- */}
           <Card className="glass-card rounded-3xl">
