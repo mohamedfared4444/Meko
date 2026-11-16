@@ -1,12 +1,1 @@
-{
-  "crons": [
-    {
-      "path": "/api/maintenance/dbfix",
-      "schedule": "50 20 * * *"
-    },
-    {
-      "path": "/api/maintenance/pipeline",
-      "schedule": "0 21 * * *"
-    }
-  ]
-}
+{ }

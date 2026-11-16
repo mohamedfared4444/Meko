@@ -31,6 +31,14 @@ import { ProviderHttpError, type ProviderAdapter } from "./types-adapter";
 
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
+/** ميزانية العملية المتزامنة كلها (توليد + رفع) — أقل من حد Vercel 60 ثانية بهامش آمن.
+ *  سلسلة الرفع تشترك مع التوليد في الميزانية المتبقية عبر remainingMs: إن نفدت
+ *  تتجاوز كل المضيفين فورًا ويُعاد data:image/...;base64 لحظيًا فلا يُرمى خطأ
+ *  رفع أبدًا ولا تُقتل دالة Vercel قبل تحديث المهمة في Turso. */
+const SYNC_BUDGET_MS = 45_000;
+/** مهلة نداء Imagen الواحد لكل موديل */
+const GENERATION_TIMEOUT_MS = 25_000;
+
 const TEXT_MODEL_DEFAULT = "gemini-2.5-flash";
 const IMAGE_MODEL_DEFAULT = "imagen-4.0-generate-001";
 
@@ -192,6 +200,10 @@ export const geminiAdapter: ProviderAdapter = {
     const primary = imageModel(providerModel);
     const aspect = imagenAspect(typeof input.aspect_ratio === "string" ? input.aspect_ratio : undefined);
 
+    // ميزانية زمنية للعملية المتزامنة كلها (توليد + رفع) — نفس نمط cloudflare.ts
+    const startedAt = Date.now();
+    const remainingMs = () => SYNC_BUDGET_MS - (Date.now() - startedAt);
+
     const models = [primary, ...IMAGE_MODEL_FALLBACKS];
     let lastStatus: number | undefined;
     let lastMsg = "";
@@ -199,7 +211,7 @@ export const geminiAdapter: ProviderAdapter = {
 
     for (const model of models) {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 30_000);
+      const timer = setTimeout(() => ctrl.abort(), Math.max(6_000, Math.min(GENERATION_TIMEOUT_MS, remainingMs())));
       try {
         const res = await fetch(`${API_BASE}/${model}:predict`, {
           method: "POST",
@@ -251,8 +263,10 @@ export const geminiAdapter: ProviderAdapter = {
       throw new ProviderHttpError("تعذر فك ترميز Base64 لصورة Imagen", 502);
     }
 
-    // رفع السلسلة المشتركة — لا يُلقي أبدًا (data URL كحل أخير)
-    const url = await uploadViaHosts(bytes, "image/png");
+    // رفع السلسلة المشتركة — لا يُلقي أبدًا (data URL كحل أخير مضمون 100%)
+    // remainingMs يجعل السلسلة تحترم الميزانية المتبقية: إن نفدت تُعاد الصورة
+    // نفسها بصيغة data:image/...;base64 لحظيًا بدل أي خطأ رفع
+    const url = await uploadViaHosts(bytes, "image/png", remainingMs);
     return { urls: [url] };
   },
 

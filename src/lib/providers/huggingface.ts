@@ -26,6 +26,14 @@ import { ProviderHttpError, type ProviderAdapter } from "./types-adapter";
 
 const FLUX_MODEL_DEFAULT = "black-forest-labs/FLUX.1-schnell";
 
+/** ميزانية العملية المتزامنة كلها (توليد + رفع) — أقل من حد Vercel 60 ثانية بهامش آمن.
+ *  سلسلة الرفع تشترك مع التوليد في الميزانية المتبقية عبر remainingMs — لو نفدت
+ *  تتجاوز كل المضيفين فورًا ويُعاد data URL لحظيًا فلا تُقتل دالة Vercel قبل
+ *  تحديث المهمة في Turso ولا يُرمى خطأ «تعذر رفع الصورة» أبدًا. */
+const SYNC_BUDGET_MS = 45_000;
+/** مهلة نداء التوليد الواحد — FLUX.1-schnell سريع وثوانٍ معدودة تكفيه بفضل */
+const GENERATION_TIMEOUT_MS = 30_000;
+
 /** تطبيع بادئة مفتاح HF إلى hf_ صغيرة (الجسم حساس لحالة الأحرف ويُحفظ كما هو) */
 export function normalizeHfKey(key: string): string {
   return key.replace(/^hf_/i, "hf_");
@@ -90,6 +98,10 @@ export const huggingfaceAdapter: ProviderAdapter = {
     const ratio = typeof input.aspect_ratio === "string" && input.aspect_ratio !== "auto" ? input.aspect_ratio : "";
     const size = RATIO_SIZES[ratio] ?? { width: 1024, height: 1024 };
 
+    // ميزانية زمنية للعملية المتزامنة كلها (توليد + رفع) — نفس نمط cloudflare.ts
+    const startedAt = Date.now();
+    const remainingMs = () => SYNC_BUDGET_MS - (Date.now() - startedAt);
+
     let blob: Blob | null = null;
     let lastStatus: number | undefined;
     let lastMsg = "";
@@ -98,12 +110,16 @@ export const huggingfaceAdapter: ProviderAdapter = {
     try {
       const InferenceClient = await loadInferenceClient();
       const client = new InferenceClient(apiKey);
+      // إجهاض نداء التوليد عند تجاوز الميزانية — إما صورة أو خطأ مُصنَّف،
+      // لكن الميزانية المتبقية تبقى لسلسلة الرفع (أو data URL الفوري)
+      const genSignal = AbortSignal.timeout(Math.max(5_000, Math.min(GENERATION_TIMEOUT_MS, remainingMs())));
       const out = (await client.textToImage({
         model,
         inputs: prompt,
         parameters: { width: size.width, height: size.height },
         // بلا تحديد مزود → auto (أول مزود متاح للموديل حسب ترتيب الحساب)
-      })) as unknown;
+        signal: genSignal,
+      } as never)) as unknown;
       // العميل يعيد Blob صورة (وعلى بعض الإصدارات نوعًا نصيًا نادرًا) — نوحّد إلى Blob
       blob = out instanceof Blob ? out : new Blob([typeof out === "string" ? out : JSON.stringify(out)], { type: "image/png" });
     } catch (e) {
@@ -125,7 +141,7 @@ export const huggingfaceAdapter: ProviderAdapter = {
     // 2) احتياط: نداء REST خام على مسار hf-inference (يعمل عند توفّر الموديل هناك)
     if (!blob) {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 30_000);
+      const timer = setTimeout(() => ctrl.abort(), Math.max(5_000, Math.min(GENERATION_TIMEOUT_MS, remainingMs())));
       try {
         const res = await fetch(`https://router.huggingface.co/hf-inference/models/${model}`, {
           method: "POST",
@@ -176,9 +192,11 @@ export const huggingfaceAdapter: ProviderAdapter = {
       throw new ProviderHttpError("استجابة Hugging Face بلا بيانات صورة", 502);
     }
 
-    // رفع السلسلة المشتركة — لا يُلقي أبدًا (data URL كحل أخير)
+    // رفع السلسلة المشتركة — لا يُلقي أبدًا (data URL كحل أخير مضمون 100%)
+    // remainingMs يجعل السلسلة تحترم الميزانية المتبقية: إن نفدت تُعاد الصورة
+    // نفسها بصيغة data:image/...;base64 لحظيًا بدل أي خطأ رفع
     const finalType = sniffImageType(bytes) ?? "image/png";
-    const url = await uploadViaHosts(bytes, finalType);
+    const url = await uploadViaHosts(bytes, finalType, remainingMs);
     return { urls: [url] };
   },
 

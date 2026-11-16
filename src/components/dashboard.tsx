@@ -1,13 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 
@@ -38,6 +36,17 @@ interface KeyItem {
   created_at: string;
 }
 
+/** تفاصيل الخطوات الحية — تأتي من /api/tasks لكل مهمة */
+interface TaskDetail {
+  stage: string | null;
+  scenesTotal: number | null;
+  scenesDone: number | null;
+  hasAudio: boolean;
+  audioUrl: string | null;
+  currentProvider: string | null;
+  lastNote: string | null;
+}
+
 interface TaskItem {
   id: string;
   type: "image" | "video" | "merge";
@@ -49,138 +58,122 @@ interface TaskItem {
   error: string | null;
   attempts: number;
   created_at: string;
+  updated_at: string;
+  detail: TaskDetail;
 }
 
 interface TasksResponse {
   stats: { total: number; completed: number; failed: number; processing: number };
+  meta?: { advanced: number; timedOut: number };
   tasks: TaskItem[];
+  error?: string;
+  detail?: string;
 }
 
 // ---------------------------------------------------------------------------
+// ثوابت العرض
 
-const TOOLS: Array<{ name: string; desc: string }> = [
-  { name: "generate_image", desc: "توليد صورة من وصف نصي — Cloudflare ثم Hugging Face ثم Gemini ثم Pollinations مع تبديل تلقائي، مع إمكانية تحديد مزود معين" },
-  { name: "generate_video", desc: "توليد فيديو بصوت متزامن أصلي عبر grok-imagine-video-1-5-preview" },
-  { name: "generate_audio", desc: "توليد تعليق صوتي MP3 مجانًا عبر Edge-TTS بأصوات إنجليزية وعربية مع تحكم بسرعة النطق" },
-  { name: "create_full_video", desc: "خط إنتاج فيديو أوتوماتيكي كامل: سكربت Gemini + صوت Edge-TTS + صور المشاهد + دمج FFmpeg بحركة كاميرا وانتقالات — فيديو نهائي بأمر واحد" },
-  { name: "merge_videos", desc: "دمج عدة مقاطع فيديو في مقطع واحد بالترتيب المطلوب" },
-  { name: "get_task", desc: "تتبع أي مهمة بمعرّفها حتى الاكتمال وعرض الروابط" },
-  { name: "list_media", desc: "استرجاع أحدث الصور والفيديوهات المخزنة بروابطها" },
-];
+/** خط إنتاج الفيديو الكامل — يعرض متتبع مراحل خاص */
+const FULL_VIDEO_MODEL = "full-video-pipeline";
 
-/** تسميات المزودات المعروضة في الواجهة */
 const PROVIDER_LABELS: Record<string, string> = {
-  kie: "kie.ai",
-  cometapi: "CometAPI",
-  cloudflare: "Cloudflare AI",
-  pollinations: "Pollinations",
-  gemini: "Google Gemini",
+  cloudflare: "Cloudflare",
   huggingface: "Hugging Face",
+  gemini: "Gemini",
+  pollinations: "Pollinations",
+  kie: "KIE.ai",
+  cometapi: "CometAPI",
 };
 
-/** تلميح صيغة المفتاح لكل مزود */
-function providerHint(provider: string) {
-  if (provider === "cloudflare") {
-    return (
-      <p className="text-[11px] leading-relaxed text-white/50">
-        صيغتا مفتاح Cloudflare (مفصولة بنقطتين): <code dir="ltr" className="font-mono text-white/70">ACCOUNT_ID:API_TOKEN</code> للتوكن أو <code dir="ltr" className="font-mono text-white/70">ACCOUNT_ID:EMAIL:GLOBAL_API_KEY</code> لمفتاح API العام — يُخزَّن كما هو ويُفصل تلقائيًا عند التوليد (Bearer أو X-Auth-Email/X-Auth-Key). المفتاح العام بالصيغة الجديدة <code dir="ltr" className="font-mono text-white/70">cfk_…</code> يُطبَّع تلقائيًا عند الإرسال (تُصغَّر البادئة فقط) ولا يُجرَّب أبدًا كتوكن Bearer.
-      </p>
-    );
-  }
-  if (provider === "pollinations") {
-    return (
-      <p className="text-[11px] leading-relaxed text-white/50">
-        مزود مجاني مفتوح بلا مفتاح حقيقي — اكتب <code dir="ltr" className="font-mono text-white/70">free</code> في حقل المفتاح لتخزينه وترتيبه ضمن المجمع.
-      </p>
-    );
-  }
-  if (provider === "gemini") {
-    return (
-      <p className="text-[11px] leading-relaxed text-white/50">
-        مفتاح Google Gemini — يُقبل كما هو بلا أي رفض للبادئات: مفاتيح Google AI Studio بصيغة <code dir="ltr" className="font-mono text-white/70">AIza…</code> ومفاتيح Google Cloud الجديدة بصيغة <code dir="ltr" className="font-mono text-white/70">AQ.…</code> كلاهما مقبول. يُستخدم لكتابة سكربتات الفيديو (gemini-2.5-flash) وكخط احتياطي لتوليد الصور عبر Imagen.
-      </p>
-    );
-  }
-  if (provider === "huggingface") {
-    return (
-      <p className="text-[11px] leading-relaxed text-white/50">
-        مفتاح Hugging Face بصيغة <code dir="ltr" className="font-mono text-white/70">hf_…</code> — تُطبَّع البادئة تلقائيًا من <code dir="ltr" className="font-mono text-white/70">Hf_</code> إلى <code dir="ltr" className="font-mono text-white/70">hf_</code> عند التخزين والإرسال. يُستخدم لتوليد الصور عبر FLUX.1-schnell (يتطلب رصيد Inference Providers إن كان الحساب مجانيًا — الفشل بـ 402 يبدّل تلقائيًا للمزود التالي دون تعطيل المفتاح).
-      </p>
-    );
-  }
-  return null;
+const STATUS_STYLES: Record<string, string> = {
+  active: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  exhausted: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+  disabled: "bg-red-500/15 text-red-400 border-red-500/30",
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  active: "نشط",
+  exhausted: "مستنزف",
+  disabled: "معطّل",
+};
+
+/** مراحل خط إنتاج الفيديو الكامل — بالترتيب مع تسمياتها */
+const PIPELINE_STAGES: Array<{ id: string; label: string }> = [
+  { id: "script", label: "السكربت والمشاهد" },
+  { id: "audio", label: "التعليق الصوتي" },
+  { id: "images", label: "صور المشاهد" },
+  { id: "merge", label: "دمج الفيديو" },
+];
+
+// ---------------------------------------------------------------------------
+// أدوات عرض صغيرة
+
+function sinceText(iso: string): string {
+  const t = Date.parse(iso.includes("T") ? iso : iso.replace(" ", "T") + (iso.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(iso) ? "" : "Z"));
+  if (!Number.isFinite(t)) return "";
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 5) return "الآن";
+  if (s < 60) return `منذ ${s} ثانية`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `منذ ${m} دقيقة${m === 1 ? "" : m === 2 ? "" : ""}`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `منذ ${h} ساعة`;
+  const d = Math.floor(h / 24);
+  return `منذ ${d} يوم`;
 }
 
-function keyInputPlaceholder(provider: string): string {
-  if (provider === "cloudflare") return "ACCOUNT_ID:API_TOKEN أو ACCOUNT_ID:EMAIL:GLOBAL_API_KEY";
-  if (provider === "pollinations") return "اكتب free (بلا مفتاح حقيقي)";
-  if (provider === "gemini") return "AIza… أو AQ. (كلاهما مقبول كما هو)";
-  if (provider === "huggingface") return "hf_… (تُطبَّع البادئة تلقائيًا)";
-  return "ألصق مفتاح API هنا";
+function shortId(id: string): string {
+  return id.slice(0, 8);
 }
 
-function statusBadge(status: string) {
-  switch (status) {
-    case "active":
-    case "completed":
-      return <Badge className="rounded-full px-3 bg-emerald-500/[0.12] text-emerald-300 border border-emerald-400/25">نشط</Badge>;
-    case "exhausted":
-      return <Badge className="rounded-full px-3 bg-amber-500/[0.12] text-amber-300 border border-amber-400/25">مستنزف</Badge>;
-    case "processing":
-    case "pending":
-      return <Badge className="rounded-full px-3 bg-[#007AFF]/[0.12] text-[#7CC0FF] border border-[#007AFF]/30">جارية</Badge>;
-    case "failed":
-      return <Badge className="rounded-full px-3 bg-red-500/[0.12] text-red-300 border border-red-400/25">فاشلة</Badge>;
-    case "disabled":
-      return <Badge className="rounded-full px-3 bg-white/[0.07] text-white/70 border border-white/[0.12]">معطّل</Badge>;
-    default:
-      return <Badge className="rounded-full px-3 bg-[#007AFF]/[0.12] text-[#7CC0FF] border border-[#007AFF]/30">{status}</Badge>;
-  }
+/** هل الرابط قابل للعرض/التحميل مباشرة (data URLs طويلة جدًا للعرض كرابط) */
+function isHttpUrl(u: string): boolean {
+  return /^https?:\/\//i.test(u);
 }
 
-function typeName(t: string) {
-  return t === "image" ? "صورة" : t === "video" ? "فيديو" : "دمج";
-}
-
-function fmtDate(s: string) {
-  if (!s) return "";
-  return s.replace("T", " ").slice(0, 16);
-}
-
-async function copyText(text: string, okMsg: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast.success(okMsg);
-  } catch {
-    toast.error("تعذر النسخ — انسخ يدويًا من الحقل.");
-  }
+function modelLabel(model: string): string {
+  if (model === FULL_VIDEO_MODEL) return "خط إنتاج فيديو كامل";
+  return model;
 }
 
 // ---------------------------------------------------------------------------
+// اللوحة الرئيسية
 
 export default function Dashboard() {
   const [health, setHealth] = useState<HealthInfo | null>(null);
-  const [healthOffline, setHealthOffline] = useState(false);
+  const [stats, setStats] = useState<TasksResponse["stats"] | null>(null);
+  const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [keys, setKeys] = useState<KeyItem[]>([]);
-  const [tasksData, setTasksData] = useState<TasksResponse | null>(null);
-  const [mcpUrl, setMcpUrl] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [tasksError, setTasksError] = useState<string | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const [isLiveSyncing, setIsLiveSyncing] = useState(false);
 
-  // نموذج إضافة مفتاح
-  const [provider, setProvider] = useState("kie");
-  const [label, setLabel] = useState("");
-  const [apiKey, setApiKey] = useState("");
+  // مراجع حماية التدفق: طلب واحد قيد الطيران للواجهة، وإيقاف التحديث عند التفريغ
+  const tasksFetching = useRef(false);
+  const mounted = useRef(true);
 
-  const loadHealth = useCallback(async () => {
+  const loadTasks = useCallback(async () => {
+    if (tasksFetching.current || typeof document === "undefined") return;
+    if (document.hidden) return; // التبويب في الخلفية — لا استدعاءات عبثية
+    tasksFetching.current = true;
+    setIsLiveSyncing(true);
     try {
-      const r = await fetch("/api/health", { cache: "no-store" });
-      const j = (await r.json()) as HealthInfo;
-      setHealth(j);
-      setHealthOffline(false);
+      const r = await fetch("/api/tasks?limit=50", { cache: "no-store" });
+      const j = (await r.json()) as TasksResponse;
+      if (!mounted.current) return;
+      if (j.error) {
+        setTasksError(j.error);
+        return;
+      }
+      setTasksError(null);
+      setStats(j.stats);
+      setTasks(j.tasks);
     } catch {
-      // فشل الشبكة نفسها — يظهر في الشارة كحالة فحص/انقطاع مع سبب في صندوق التشخيص أدناه
-      setHealth(null);
-      setHealthOffline(true);
+      if (mounted.current) setTasksError("تعذر الاتصال بالخادم — يعاد المحاولة تلقائيًا كل 5 ثوانٍ.");
+    } finally {
+      tasksFetching.current = false;
+      if (mounted.current) setIsLiveSyncing(false);
     }
   }, []);
 
@@ -188,440 +181,561 @@ export default function Dashboard() {
     try {
       const r = await fetch("/api/keys", { cache: "no-store" });
       const j = (await r.json()) as { keys: KeyItem[] };
-      setKeys(j.keys ?? []);
+      if (mounted.current) setKeys(j.keys ?? []);
     } catch {
-      /* تجاهل */
+      /* صامت — القائمة تُجلب مجددًا في الدورة التالية */
     }
   }, []);
 
-  const loadTasks = useCallback(async () => {
+  const loadHealth = useCallback(async () => {
     try {
-      const r = await fetch("/api/tasks?limit=20", { cache: "no-store" });
-      const j = (await r.json()) as TasksResponse;
-      setTasksData(j);
+      const r = await fetch("/api/health", { cache: "no-store" });
+      const j = (await r.json()) as HealthInfo;
+      if (mounted.current) setHealth(j);
     } catch {
-      /* تجاهل */
+      /* صامت */
     }
   }, []);
 
   useEffect(() => {
-    // الرابط والتحميل الأولي داخل مؤقت — تفاديًا لضبط الحالة تزامنيًا داخل الإفكت
-    const t0 = setTimeout(() => {
-      setMcpUrl(`${window.location.origin}/mcp`);
-      void loadHealth();
-      void loadKeys();
-      void loadTasks();
-    }, 0);
-    const t1 = setInterval(() => void loadTasks(), 5000); // لوحة المهام تتحدث كل 5 ثوانٍ
-    const t2 = setInterval(() => void loadHealth(), 30000);
+    mounted.current = true;
+    void loadHealth();
+    void loadKeys();
+    void loadTasks();
+    const tasksTimer = setInterval(() => void loadTasks(), 5000);
+    const keysTimer = setInterval(() => void loadKeys(), 30000);
+    const healthTimer = setInterval(() => void loadHealth(), 60000);
+    const tick = setInterval(() => setNow(Date.now()), 1000);
     return () => {
-      clearTimeout(t0);
-      clearInterval(t1);
-      clearInterval(t2);
+      mounted.current = false;
+      clearInterval(tasksTimer);
+      clearInterval(keysTimer);
+      clearInterval(healthTimer);
+      clearInterval(tick);
     };
-  }, [loadHealth, loadKeys, loadTasks]);
+  }, [loadTasks, loadKeys, loadHealth]);
 
-  async function addKey() {
+  // المهمتا الجاريتان للعرض الرئيسي — الأحدث أولًا
+  const processing = tasks.filter((t) => t.status === "processing" || t.status === "pending");
+  const completed = tasks.filter((t) => t.status === "completed");
+  const failed = tasks.filter((t) => t.status === "failed");
+
+  return (
+    <div className="min-h-screen flex flex-row bg-background text-foreground">
+      <Toaster richColors position="top-center" />
+      {/* الشريط الجانبي — ثابت على الشاشات الكبيرة، Drawer على الموبايل */}
+      <aside className="hidden lg:flex w-[400px] shrink-0 flex-col border-e border-white/10 bg-[#0a0b0e]">
+        <SidebarContent keys={keys} onKeysChanged={loadKeys} completed={completed} failed={failed} />
+      </aside>
+      {drawerOpen && (
+        <div className="lg:hidden fixed inset-0 z-50 flex">
+          <button aria-label="إغلاق" className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setDrawerOpen(false)} />
+          <div className="relative w-[min(420px,92vw)] h-full flex flex-col bg-[#0a0b0e] border-e border-white/10 shadow-2xl animate-in slide-in-from-right duration-200 overflow-hidden">
+            <button
+              aria-label="إغلاق القائمة"
+              onClick={() => setDrawerOpen(false)}
+              className="absolute top-3 start-3 z-10 rounded-full bg-white/10 hover:bg-white/20 w-8 h-8 flex items-center justify-center text-sm"
+            >
+              ✕
+            </button>
+            <SidebarContent keys={keys} onKeysChanged={loadKeys} completed={completed} failed={failed} />
+          </div>
+        </div>
+      )}
+
+      {/* المنطقة الرئيسية — العمل الجاري فقط */}
+      <main className="flex-1 flex flex-col min-w-0">
+        <header className="sticky top-0 z-40 border-b border-white/10 bg-[#050507]/85 backdrop-blur-md">
+          <div className="mx-auto w-full max-w-4xl px-4 sm:px-6 py-3 flex items-center gap-3">
+            <button
+              aria-label="فتح القائمة"
+              onClick={() => setDrawerOpen(true)}
+              className="lg:hidden rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 px-2.5 py-2"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M3 6h18M3 12h18M3 18h18" />
+              </svg>
+            </button>
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="w-8 h-8 rounded-lg bg-primary/20 text-primary flex items-center justify-center shrink-0">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z" />
+                </svg>
+              </span>
+              <div className="min-w-0">
+                <h1 className="text-[15px] font-bold leading-tight truncate">Meko — العمل المباشر</h1>
+                <p className="text-[11px] text-muted-foreground leading-tight">
+                  {isLiveSyncing && processing.length > 0 ? "جارٍ دفع المهمة للأمام حيًّا…" : "تحديث تلقائي كل 5 ثوانٍ"}
+                </p>
+              </div>
+            </div>
+            <div className="ms-auto flex items-center gap-1.5 shrink-0">
+              {stats && (
+                <span className="hidden sm:flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <Chip>{processing.length} جارية</Chip>
+                  <Chip>{completed.length} مكتملة</Chip>
+                  <Chip>{failed.length} فاشلة</Chip>
+                </span>
+              )}
+              <span
+                className={`w-2.5 h-2.5 rounded-full shrink-0 ${health?.ok ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" : "bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.8)]"}`}
+                title={health?.ok ? "قاعدة البيانات متصلة" : (health?.dbError ?? "قاعدة البيانات غير متصلة")}
+              />
+            </div>
+          </div>
+        </header>
+
+        <div className="mx-auto w-full max-w-4xl px-4 sm:px-6 py-5 flex-1">
+          {tasksError && (
+            <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-xs px-4 py-3">{tasksError}</div>
+          )}
+
+          {processing.length === 0 ? (
+            <IdleState mcpEndpoint={health?.mcpEndpoint ?? "/mcp"} />
+          ) : (
+            <div className="space-y-4">
+              {processing.map((t) => (
+                <ActiveTaskCard key={t.id} task={t} now={now} />
+              ))}
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// الشريط الجانبي — أرشيف المهام + إدارة المفاتيح
+
+function SidebarContent({
+  keys,
+  onKeysChanged,
+  completed,
+  failed,
+}: {
+  keys: KeyItem[];
+  onKeysChanged: () => void | Promise<void>;
+  completed: TaskItem[];
+  failed: TaskItem[];
+}) {
+  const [section, setSection] = useState<"archive" | "keys">("archive");
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      <div className="px-4 pt-4 pb-3 border-b border-white/10 flex gap-2">
+        <SectionTab active={section === "archive"} onClick={() => setSection("archive")}>
+          أرشيف المهام
+        </SectionTab>
+        <SectionTab active={section === "keys"} onClick={() => setSection("keys")}>
+          مفاتيح الـ API
+        </SectionTab>
+      </div>
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 min-h-0">
+        {section === "archive" ? <ArchiveSection completed={completed} failed={failed} /> : <KeysSection keys={keys} onKeysChanged={onKeysChanged} />}
+      </div>
+    </div>
+  );
+}
+
+function SectionTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex-1 rounded-lg px-3 py-2 text-[13px] font-semibold transition-colors ${
+        active ? "bg-primary text-white" : "bg-white/5 text-muted-foreground hover:bg-white/10"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Chip({ children }: { children: React.ReactNode }) {
+  return <span className="rounded-md bg-white/5 border border-white/10 px-2 py-0.5 text-[11px] text-muted-foreground">{children}</span>;
+}
+
+// ---------------------------------------------------------------------------
+// المنطقة الرئيسية — بطاقة المهمة الجارية
+
+const STAGE_LABELS: Record<string, string> = {
+  script: "كتابة السكربت وتقسيم المشاهد",
+  audio: "توليد التعليق الصوتي",
+  images: "توليد صور المشاهد",
+  merge: "دمج الفيديو النهائي",
+};
+
+function ActiveTaskCard({ task, now: _now }: { task: TaskItem; now: number }) {
+  const isPipeline = task.model === FULL_VIDEO_MODEL;
+  const stageIndex = isPipeline ? Math.max(0, PIPELINE_STAGES.findIndex((s) => s.id === (task.detail?.stage ?? "script"))) : -1;
+  const provider = task.detail?.currentProvider;
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-card overflow-hidden">
+      <div className="px-4 sm:px-5 pt-4 pb-3 border-b border-white/5">
+        <div className="flex items-center gap-2 flex-wrap">
+          {isPipeline && <Badge className="bg-primary/20 text-primary border-primary/40 hover:bg-primary/20">خط إنتاج فيديو كامل</Badge>}
+          <Badge variant="outline" className="bg-white/5 text-muted-foreground border-white/15 hover:bg-white/5">
+            {modelLabel(task.model)}
+          </Badge>
+          <span className="text-[11px] text-muted-foreground font-mono" title={task.id}>
+            #{shortId(task.id)}
+          </span>
+          <span className="text-[11px] text-muted-foreground ms-auto">{sinceText(task.created_at)}</span>
+        </div>
+        <p className="mt-2 text-[13px] leading-relaxed text-foreground/90 line-clamp-2" title={task.prompt}>
+          {task.prompt || "—"}
+        </p>
+      </div>
+
+      <div className="px-4 sm:px-5 py-4 space-y-4">
+        {/* نسبة التقدم */}
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[13px] font-semibold">
+              {isPipeline && task.detail?.stage ? STAGE_LABELS[task.detail.stage] ?? "قيد العمل" : "قيد العمل"}
+            </span>
+            <span className="text-[13px] font-bold text-primary tabular-nums">{Math.round(task.progress)}%</span>
+          </div>
+          <Progress value={task.progress} className="h-2" />
+        </div>
+
+        {/* متتبع مراحل خط الإنتاج */}
+        {isPipeline && stageIndex >= 0 && (
+          <div className="flex items-center gap-1 sm:gap-1.5">
+            {PIPELINE_STAGES.map((s, i) => (
+              <div key={s.id} className="flex-1 flex flex-col items-center gap-1.5">
+                <div
+                  className={`w-2.5 h-2.5 rounded-full transition-colors ${
+                    i < stageIndex ? "bg-emerald-400" : i === stageIndex ? "bg-primary shadow-[0_0_10px_rgba(0,122,255,0.9)] animate-pulse" : "bg-white/15"
+                  }`}
+                />
+                <span className={`text-[10px] leading-tight text-center ${i === stageIndex ? "text-foreground font-semibold" : "text-muted-foreground"}`}>
+                  {s.label}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* تفاصيل الخطوات الحية */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          {isPipeline && task.detail?.scenesTotal != null && (
+            <DetailCell label="صور المشاهد" value={`${task.detail.scenesDone ?? 0} / ${task.detail.scenesTotal}`} accent={task.detail.scenesDone === task.detail.scenesTotal} />
+          )}
+          {isPipeline && (
+            <DetailCell
+              label="التعليق الصوتي"
+              value={task.detail?.hasAudio ? (task.detail.audioUrl && isHttpUrl(task.detail.audioUrl) ? "جاهز" : "جاهز (مضمّن)") : "قيد التوليد"}
+              accent={task.detail?.hasAudio}
+            />
+          )}
+          <DetailCell label="المزود الحالي" value={provider ? PROVIDER_LABELS[provider] ?? provider : "—"} />
+          <DetailCell label="المحاولات" value={String(task.attempts)} />
+        </div>
+
+        {task.error && (
+          <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300 leading-relaxed line-clamp-2">
+            {task.error}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DetailCell({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div className="rounded-lg bg-white/[0.04] border border-white/5 px-3 py-2">
+      <div className="text-[10px] text-muted-foreground">{label}</div>
+      <div className={`text-[13px] font-semibold mt-0.5 truncate ${accent ? "text-emerald-400" : ""}`}>{value}</div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// حالة اللاعمل — رسالة هادئة
+
+function IdleState({ mcpEndpoint }: { mcpEndpoint: string }) {
+  return (
+    <div className="mt-10 sm:mt-16 flex flex-col items-center text-center gap-4">
+      <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/25 flex items-center justify-center text-primary">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z" />
+        </svg>
+      </div>
+      <div className="space-y-2">
+        <h2 className="text-xl font-bold">النظام جاهز لاستقبال الطلبات</h2>
+        <p className="text-sm text-muted-foreground leading-relaxed max-w-md">
+          لا توجد مهام جارية الآن. أرسل طلب توليد صور أو فيديو كامل عبر عميل MCP (Claude مثلاً)، وستظهر المهمة هنا فورًا وتتقدم وتكتمل تلقائيًا.
+        </p>
+      </div>
+      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        <span>نقطة MCP:</span>
+        <code className="rounded-md bg-white/5 border border-white/10 px-2 py-1 font-mono text-foreground/80" dir="ltr">
+          {mcpEndpoint}
+        </code>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// الشريط الجانبي — أرشيف المهام المنتهية
+
+function ArchiveSection({ completed, failed }: { completed: TaskItem[]; failed: TaskItem[] }) {
+  if (completed.length === 0 && failed.length === 0) {
+    return (
+      <div className="text-center text-muted-foreground text-xs py-10 px-2">
+        <p>لا توجد مهام منتهية بعد.</p>
+        <p className="mt-1">المهام المكتملة والفاشلة تظهر هنا مع روابطها وأسباب الأخطاء.</p>
+      </div>
+    );
+  }
+  return (
+    <>
+      {completed.map((t) => (
+        <CompletedCard key={t.id} task={t} />
+      ))}
+      {failed.map((t) => (
+        <FailedCard key={t.id} task={t} />
+      ))}
+    </>
+  );
+}
+
+function CompletedCard({ task }: { task: TaskItem }) {
+  const httpUrls = task.urls.filter(isHttpUrl);
+  const embedded = task.urls.length - httpUrls.length;
+  return (
+    <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] p-3.5 space-y-2.5">
+      <div className="flex items-center gap-2">
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+        <span className="text-[12px] font-semibold text-emerald-300 truncate flex-1">{modelLabel(task.model)}</span>
+        <span className="text-[10px] text-muted-foreground shrink-0">{sinceText(task.created_at)}</span>
+      </div>
+      <p className="text-[11px] text-muted-foreground line-clamp-2" title={task.prompt}>
+        {task.prompt || "—"}
+      </p>
+      {httpUrls.length > 0 && (
+        <div className="space-y-1.5">
+          {httpUrls.slice(0, 6).map((u, i) => (
+            <a
+              key={i}
+              href={u}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 px-2.5 py-1.5 text-[11px] text-primary transition-colors"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                <path d="M15 3h6v6" />
+                <path d="M10 14 21 3" />
+              </svg>
+              <span className="truncate font-mono" dir="ltr">
+                {u.replace(/^https?:\/\//, "").slice(0, 46)}
+              </span>
+            </a>
+          ))}
+        </div>
+      )}
+      {embedded > 0 && <p className="text-[10px] text-muted-foreground">+ {embedded} نتيجة مضمّنة داخل الاستجابة (data URL)</p>}
+      <p className="text-[10px] text-muted-foreground font-mono" title={task.id}>
+        #{shortId(task.id)}
+      </p>
+    </div>
+  );
+}
+
+function FailedCard({ task }: { task: TaskItem }) {
+  return (
+    <div className="rounded-xl border border-red-500/25 bg-red-500/[0.06] p-3.5 space-y-2">
+      <div className="flex items-center gap-2">
+        <span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />
+        <span className="text-[12px] font-semibold text-red-300 truncate flex-1">{modelLabel(task.model)}</span>
+        <span className="text-[10px] text-muted-foreground shrink-0">{sinceText(task.created_at)}</span>
+      </div>
+      <p className="text-[11px] text-muted-foreground line-clamp-1" title={task.prompt}>
+        {task.prompt || "—"}
+      </p>
+      <p className="text-[11px] text-red-300/90 leading-relaxed line-clamp-3" title={task.error ?? ""}>
+        {task.error || "سبب غير معروف"}
+      </p>
+      <p className="text-[10px] text-muted-foreground font-mono" title={task.id}>
+        #{shortId(task.id)}
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// الشريط الجانبي — إدارة مفاتيح الـ API
+
+const KEY_PROVIDERS = [
+  { id: "cloudflare", label: "Cloudflare", hint: "ACCOUNT_ID:API_TOKEN أو ACCOUNT_ID:EMAIL:GLOBAL_API_KEY" },
+  { id: "huggingface", label: "Hugging Face", hint: "hf_…" },
+  { id: "gemini", label: "Gemini", hint: "AIza… أو AQ.…" },
+  { id: "pollinations", label: "Pollinations", hint: "أي نص مثل free" },
+  { id: "kie", label: "KIE.ai", hint: "توكن الحساب" },
+  { id: "cometapi", label: "CometAPI", hint: "توكن الحساب" },
+];
+
+function KeysSection({ keys, onKeysChanged }: { keys: KeyItem[]; onKeysChanged: () => void | Promise<void> }) {
+  const [provider, setProvider] = useState<string>("cloudflare");
+  const [apiKey, setApiKey] = useState("");
+  const [label, setLabel] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
     if (!apiKey.trim()) {
-      toast.error("أدخل المفتاح أولًا.");
+      toast.error("الصق المفتاح أولًا");
       return;
     }
-    setBusy(true);
+    setSaving(true);
     try {
       const r = await fetch("/api/keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider, api_key: apiKey.trim(), label: label.trim() }),
       });
-      // قراءة آمنة للاستجابة: JSON متوقع، لكن أي جسم آخر (مثل صفحة خطأ 5xx) لا يُخفي السبب
-      const text = await r.text();
-      let j: { error?: string; detail?: string } = {};
-      try {
-        j = JSON.parse(text) as { error?: string; detail?: string };
-      } catch {
-        j = { error: `استجابة غير متوقعة من الخادم (HTTP ${r.status}).` };
-      }
+      const j = (await r.json()) as { error?: string };
       if (!r.ok) {
-        const base = j.error ?? "فشل إضافة المفتاح.";
-        toast.error(j.detail ? base + "\n" + j.detail : base, { duration: 8000 });
-      } else {
-        toast.success("أُضيف المفتاح — سيُجرَّب أولًا حسب ترتيب الإضافة.");
-        setApiKey("");
-        setLabel("");
-        await loadKeys();
+        toast.error(j.error ?? "تعذر حفظ المفتاح");
+        return;
       }
-    } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
-      toast.error(`تعذر الاتصال بالخادم — تحقق من الشبكة. (${reason})`, { duration: 8000 });
+      toast.success("تمت إضافة المفتاح وتنشيطه");
+      setApiKey("");
+      setLabel("");
+      await onKeysChanged();
+    } catch {
+      toast.error("تعذر الاتصال بالخادم");
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
-  }
+  };
 
-  async function toggleKey(k: KeyItem) {
-    setBusy(true);
+  const toggle = async (k: KeyItem) => {
+    const action = k.status === "active" ? "disable" : "enable";
     try {
       const r = await fetch(`/api/keys/${k.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: k.status === "disabled" ? "enable" : "disable" }),
+        body: JSON.stringify({ action }),
       });
       if (!r.ok) {
         const j = (await r.json()) as { error?: string };
-        toast.error(j.error ?? "فشل تغيير الحالة.");
-      } else {
-        await loadKeys();
+        toast.error(j.error ?? "تعذر تغيير حالة المفتاح");
+        return;
       }
-    } finally {
-      setBusy(false);
+      toast.success(action === "disable" ? "تم تعطيل المفتاح" : "تم تفعيل المفتاح");
+      await onKeysChanged();
+    } catch {
+      toast.error("تعذر الاتصال بالخادم");
     }
-  }
+  };
 
-  async function deleteKey(k: KeyItem) {
-    setBusy(true);
+  const remove = async (k: KeyItem) => {
+    if (!window.confirm(`حذف المفتاح ${k.label || PROVIDER_LABELS[k.provider] || k.provider} نهائيًا؟`)) return;
     try {
       const r = await fetch(`/api/keys/${k.id}`, { method: "DELETE" });
       if (!r.ok) {
         const j = (await r.json()) as { error?: string };
-        toast.error(j.error ?? "فشل الحذف.");
-      } else {
-        toast.success("حُذف المفتاح.");
-        await loadKeys();
+        toast.error(j.error ?? "تعذر حذف المفتاح");
+        return;
       }
-    } finally {
-      setBusy(false);
+      toast.success("تم حذف المفتاح");
+      await onKeysChanged();
+    } catch {
+      toast.error("تعذر الاتصال بالخادم");
     }
-  }
-
-  const authHeaders = health?.authRequired
-    ? `,\n        "headers": {\n          "Authorization": "Bearer <MCP_ACCESS_TOKEN>"\n        }`
-    : "";
-  const chatgptJson = `{\n  "mcpServers": {\n    "media-generator": {\n      "url": "${mcpUrl}"${authHeaders}\n    }\n  }\n}`;
-  const claudeJson = `{\n  "mcpServers": {\n    "media-generator": {\n      "type": "http",\n      "url": "${mcpUrl}"${authHeaders}\n    }\n  }\n}`;
-  const cursorJson = `{\n  "mcpServers": {\n    "media-generator": {\n      "url": "${mcpUrl}"${authHeaders}\n    }\n  }\n}`;
-
-  const stats = tasksData?.stats ?? { total: 0, completed: 0, failed: 0, processing: 0 };
+  };
 
   return (
-    <div className="min-h-screen flex flex-col relative bg-[#050507] text-white overflow-x-clip">
-      {/* إضاءة محيطية ناعمة على طراز macOS */}
-      <div aria-hidden className="pointer-events-none fixed inset-0 -z-10">
-        <div className="absolute -top-48 left-1/2 -translate-x-1/2 h-[440px] w-[760px] rounded-full bg-[#007AFF]/[0.13] blur-[150px]" />
-        <div className="absolute bottom-[-200px] end-[-140px] h-[400px] w-[540px] rounded-full bg-[#5E5CE6]/[0.10] blur-[160px]" />
-        <div className="absolute top-[30%] start-[-160px] h-[340px] w-[440px] rounded-full bg-[#30D158]/[0.05] blur-[150px]" />
+    <div className="space-y-4">
+      {/* إضافة مفتاح */}
+      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3.5 space-y-2.5">
+        <h3 className="text-[12px] font-bold">إضافة مفتاح جديد</h3>
+        <Select value={provider} onValueChange={setProvider}>
+          <SelectTrigger className="w-full h-9 text-[12px] bg-white/5 border-white/15">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {KEY_PROVIDERS.map((p) => (
+              <SelectItem key={p.id} value={p.id} className="text-[12px]">
+                {p.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Input
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder={KEY_PROVIDERS.find((p) => p.id === provider)?.hint}
+          className="h-9 text-[12px] font-mono bg-white/5 border-white/15"
+          dir="ltr"
+        />
+        <Input
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder="تسمية اختيارية (مثل: حساب 1)"
+          className="h-9 text-[12px] bg-white/5 border-white/15"
+        />
+        <Button onClick={submit} disabled={saving} className="w-full h-9 text-[12px] font-semibold">
+          {saving ? "جارٍ الحفظ…" : "إضافة وتفعيل"}
+        </Button>
       </div>
-      <Toaster position="top-center" richColors />
-      {/* ===================== الهيدر ===================== */}
-      <header className="border-b border-white/[0.07] bg-[#050507]/60 backdrop-blur-2xl sticky top-0 z-20">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6 py-3.5 flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-3 me-auto">
-            <div className="size-11 rounded-[14px] bg-gradient-to-b from-[#0A84FF] to-[#0060DF] grid place-items-center text-white font-bold text-lg shadow-lg shadow-[#007AFF]/30 ring-1 ring-inset ring-white/25">
-              M
-            </div>
-            <div>
-              <h1 className="text-[17px] font-semibold tracking-tight leading-tight text-white">Meko — مولد الوسائط الذكي</h1>
-              <p className="text-[13px] text-white/60">خادم MCP لتوليد الصور والفيديو ودمج المقاطع</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {health === null ? (
-              healthOffline ? (
-                <Badge className="rounded-full px-3 bg-red-500/[0.12] text-red-300 border border-red-400/25">غير متصل</Badge>
-              ) : (
-                <Badge className="rounded-full px-3 bg-white/[0.07] text-white/70 border border-white/[0.12]">جارٍ الفحص…</Badge>
-              )
-            ) : health.ok ? (
-              <Badge className="rounded-full px-3 bg-emerald-500/[0.12] text-emerald-300 border border-emerald-400/25">Turso متصل</Badge>
-            ) : (
-              <Badge className="rounded-full px-3 bg-red-500/[0.12] text-red-300 border border-red-400/25">غير متصل</Badge>
-            )}
-            {health?.merger && (
-              <Badge
-                className={
-                  health.merger.healthy
-                    ? "rounded-full px-3 bg-emerald-500/[0.12] text-emerald-300 border border-emerald-400/25"
-                    : "rounded-full px-3 bg-amber-500/[0.12] text-amber-300 border border-amber-400/25"
-                }
-              >
-                {health.merger.healthy ? "خدمة الدمج جاهزة" : "خدمة الدمج غير مهيأة"}
-              </Badge>
-            )}
-            {health?.authRequired && (
-              <Badge className="rounded-full px-3 bg-[#007AFF]/[0.12] text-[#7CC0FF] border border-[#007AFF]/30">محمي بـ Token</Badge>
-            )}
-          </div>
-        </div>
-      </header>
 
-      {/* ===================== المحتوى ===================== */}
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 sm:px-6 py-6 sm:py-8 space-y-5 sm:space-y-6">
-
-        {/* تشخيص فشل الاتصال — يعرض السبب الحقيقي من الخادم بدل رسالة صامتة */}
-        {health && !health.ok && (
-          <div className="rounded-2xl border border-red-400/25 bg-red-500/[0.08] p-4 text-[13px] leading-relaxed text-red-200">
-            <p className="font-semibold mb-1.5">تعذر الاتصال بقاعدة بيانات Turso — السبب من الخادم:</p>
-            <p dir="auto" className="break-words text-red-200/85">{health.dbError || health.database}</p>
-            <p className="mt-2 text-[11px] text-red-200/60">
-              تحقق من متغيرات البيئة في Vercel (TURSO_DATABASE_URL و TURSO_AUTH_TOKEN لبيئة Production) ثم أعد النشر.
-            </p>
-          </div>
-        )}
-        <div className="grid grid-cols-1 gap-5 sm:gap-6 lg:grid-cols-2 items-start">
-          {/* ---------- أ) مدير المفاتيح ---------- */}
-          <Card className="glass-card rounded-3xl">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2.5 text-[17px] tracking-tight text-white">
-                <span className="size-2.5 rounded-full bg-[#0A84FF] shadow-[0_0_10px_rgba(10,132,255,0.7)]" />
-                مدير المفاتيح
-              </CardTitle>
-              <CardDescription className="leading-relaxed">
-                أضف عدة مفاتيح لكل مزود — التجربة تسلسلية (أول مفتاح ثم التالي ثم التالي) مع تبديل فوري تلقائي عند
-                أي خطأ أو نفاد رصيد دون توقف.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_1fr]">
-                <Select value={provider} onValueChange={setProvider}>
-                  <SelectTrigger className="w-full sm:w-[150px] h-11 rounded-xl bg-white/[0.05] border-white/[0.12] text-white transition-smooth">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="kie">kie.ai</SelectItem>
-                    <SelectItem value="cometapi">CometAPI</SelectItem>
-                    <SelectItem value="cloudflare">Cloudflare AI (مجاني)</SelectItem>
-                    <SelectItem value="huggingface">Hugging Face (FLUX.1-schnell)</SelectItem>
-                    <SelectItem value="gemini">Google Gemini (سكربتات + Imagen)</SelectItem>
-                    <SelectItem value="pollinations">Pollinations (مجاني)</SelectItem>
-                  </SelectContent>
-                </Select>
-                <div className="flex gap-2">
-                  <Input
-                    placeholder="تسمية اختيارية (مثال: مفتاح رئيسي)"
-                    value={label}
-                    onChange={(e) => setLabel(e.target.value)}
-                    className="h-11 rounded-xl bg-white/[0.05] border-white/[0.12] text-white transition-smooth"
-                  />
-                </div>
+      {/* القائمة */}
+      {keys.length === 0 ? (
+        <p className="text-center text-muted-foreground text-xs py-6">لا توجد مفاتيح مخزنة بعد.</p>
+      ) : (
+        <div className="space-y-2.5">
+          {keys.map((k) => (
+            <div key={k.id} className="rounded-xl border border-white/10 bg-white/[0.03] p-3 space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[12px] font-bold">{PROVIDER_LABELS[k.provider] ?? k.provider}</span>
+                <span
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${STATUS_STYLES[k.status] ?? "bg-white/10 text-muted-foreground border-white/20"}`}
+                >
+                  {STATUS_LABELS[k.status] ?? k.status}
+                </span>
+                {k.label && <span className="text-[10px] text-muted-foreground truncate max-w-[110px]">{k.label}</span>}
               </div>
+              <div className="font-mono text-[10px] text-muted-foreground" dir="ltr">
+                {k.masked}
+              </div>
+              <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+                <span>استخدام: {k.usage_count}</span>
+                <span className="text-emerald-400/80">نجاح: {k.success_count}</span>
+                <span className="text-red-400/80">فشل: {k.fail_count}</span>
+              </div>
+              {k.last_error && (
+                <p className="text-[10px] text-amber-400/90 line-clamp-2" title={k.last_error}>
+                  {k.last_error}
+                </p>
+              )}
               <div className="flex gap-2">
-                <Input
-                  placeholder={keyInputPlaceholder(provider)}
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  className="h-11 rounded-xl bg-white/[0.05] border-white/[0.12] text-white font-mono text-left transition-smooth"
-                  dir="ltr"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void addKey();
-                  }}
-                />
-                <Button onClick={() => void addKey()} disabled={busy} className="h-11 rounded-full px-6 bg-[#007AFF] hover:bg-[#0071E3] text-white font-semibold shadow-[0_6px_18px_rgba(0,122,255,0.35)] transition-smooth disabled:opacity-50">
-                  إضافة
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 flex-1 text-[11px] border-white/15 bg-white/5 hover:bg-white/10"
+                  onClick={() => void toggle(k)}
+                >
+                  {k.status === "active" ? "تعطيل" : "تفعيل"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 flex-1 text-[11px] border-red-500/30 text-red-400 bg-red-500/5 hover:bg-red-500/15 hover:text-red-300"
+                  onClick={() => void remove(k)}
+                >
+                  حذف
                 </Button>
               </div>
-              {providerHint(provider)}
-
-              <div className="max-h-96 overflow-y-auto pe-1">
-                {keys.length === 0 ? (
-                  <p className="p-6 text-sm text-white/55 text-center">لا توجد مفاتيح بعد — أضف مفتاحًا واحدًا على الأقل لبدء التوليد.</p>
-                ) : (
-                  <ul className="space-y-2">
-                    {keys.map((k, i) => (
-                      <li key={k.id} className="glass-row rounded-2xl p-3.5 space-y-2 transition-smooth">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-xs text-white/40 font-mono">#{i + 1}</span>
-                          <Badge variant="outline" className="rounded-full border-white/[0.14] text-white/80">
-                            {PROVIDER_LABELS[k.provider] ?? k.provider}
-                          </Badge>
-                          <code className="font-mono text-xs text-white/75" dir="ltr">
-                            {k.masked}
-                          </code>
-                          {statusBadge(k.status)}
-                          {k.label && <span className="text-xs text-white/60">{k.label}</span>}
-                          <div className="ms-auto flex gap-1.5">
-                            <Button size="sm" variant="outline" className="h-8 px-3.5 text-xs rounded-full border-white/[0.14] bg-white/[0.06] text-white hover:bg-white/[0.12]" onClick={() => void toggleKey(k)}>
-                              {k.status === "disabled" ? "تنشيط" : "تعطيل"}
-                            </Button>
-                            <Button size="sm" variant="outline" className="h-8 px-3.5 text-xs rounded-full border-red-400/25 bg-red-500/[0.08] text-red-300 hover:bg-red-500/[0.16]" onClick={() => void deleteKey(k)}>
-                              حذف
-                            </Button>
-                          </div>
-                        </div>
-                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-white/60">
-                          <span>استخدام: {k.usage_count}</span>
-                          <span className="text-emerald-400">نجاح: {k.success_count}</span>
-                          <span className="text-red-400">فشل: {k.fail_count}</span>
-                          {k.last_used_at && <span>آخر استخدام: {fmtDate(k.last_used_at)}</span>}
-                        </div>
-                        {k.last_error && (
-                          <p className="text-[11px] text-red-300/80 truncate" title={k.last_error}>
-                            آخر خطأ: {k.last_error}
-                          </p>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* ---------- ب) لوحة المهام ---------- */}
-          <Card className="glass-card rounded-3xl">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2.5 text-[17px] tracking-tight text-white">
-                <span className="size-2.5 rounded-full bg-[#BF5AF2] shadow-[0_0_10px_rgba(191,90,242,0.7)]" />
-                لوحة المهام
-              </CardTitle>
-              <CardDescription>تتحدث تلقائيًا كل 5 ثوانٍ</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                <StatChip label="الإجمالي" value={stats.total} cls="text-white" />
-                <StatChip label="مكتملة" value={stats.completed} cls="text-[#30D158]" />
-                <StatChip label="فاشلة" value={stats.failed} cls="text-[#FF453A]" />
-                <StatChip label="جارية" value={stats.processing} cls="text-[#0A84FF]" />
-              </div>
-
-              <div className="max-h-96 overflow-y-auto pe-1">
-                {!tasksData || tasksData.tasks.length === 0 ? (
-                  <p className="p-6 text-sm text-white/55 text-center">لا توجد مهام بعد — ابدأ التوليد من أي عميل MCP.</p>
-                ) : (
-                  <ul className="space-y-2">
-                    {tasksData.tasks.map((t) => (
-                      <li key={t.id} className="glass-row rounded-2xl p-3.5 space-y-2 transition-smooth">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Badge variant="outline" className="rounded-full border-white/[0.14] text-white/80">
-                            {typeName(t.type)}
-                          </Badge>
-                          {statusBadge(t.status)}
-                          <code className="font-mono text-[10px] text-white/45" dir="ltr">
-                            {t.model}
-                          </code>
-                          {t.attempts > 1 && (
-                            <Badge variant="outline" className="rounded-full border-amber-400/30 text-amber-300 text-[10px]">
-                              محاولات: {t.attempts}
-                            </Badge>
-                          )}
-                          <span className="ms-auto text-[11px] text-white/45">{fmtDate(t.created_at)}</span>
-                        </div>
-                        {t.prompt && <p className="text-xs text-white/75 truncate" title={t.prompt}>{t.prompt}</p>}
-                        {t.status === "processing" && <Progress value={t.progress} className="h-1.5 bg-white/[0.10]" />}
-                        {t.status === "completed" && t.urls.length > 0 && (
-                          <div className="flex flex-wrap gap-1.5">
-                            {t.urls.map((u, i) => (
-                              <a key={i} href={u} target="_blank" rel="noreferrer">
-                                <Button size="sm" variant="outline" className="h-8 px-3.5 text-xs rounded-full border-[#007AFF]/35 bg-[#007AFF]/[0.10] text-[#7CC0FF] hover:bg-[#007AFF]/[0.22]">
-                                  فتح النتيجة {t.urls.length > 1 ? `#${i + 1}` : ""}
-                                </Button>
-                              </a>
-                            ))}
-                          </div>
-                        )}
-                        {t.status === "failed" && t.error && (
-                          <p className="text-[11px] text-red-300/90">{t.error}</p>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+            </div>
+          ))}
         </div>
-
-        {/* ---------- ج) ربط السيرفر ---------- */}
-        <Card className="glass-card rounded-3xl">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2.5 text-[17px] tracking-tight text-white">
-              <span className="size-2.5 rounded-full bg-[#30D158] shadow-[0_0_10px_rgba(48,209,88,0.7)]" />
-              ربط السيرفر بأي عميل MCP
-            </CardTitle>
-            <CardDescription>انسخ الرابط أو صيغة الإعداد المناسبة لعميلك</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex gap-2">
-              <Input readOnly value={mcpUrl} dir="ltr" className="h-11 rounded-xl bg-white/[0.05] border-white/[0.12] text-white font-mono text-left transition-smooth" />
-              <Button onClick={() => void copyText(mcpUrl, "نُسخ رابط MCP")} className="h-11 rounded-full px-6 bg-[#007AFF] hover:bg-[#0071E3] text-white font-semibold shadow-[0_6px_18px_rgba(0,122,255,0.35)] transition-smooth">
-                نسخ
-              </Button>
-            </div>
-
-            <Tabs defaultValue="chatgpt">
-              <TabsList className="bg-white/[0.06] border border-white/[0.08] rounded-full p-1 h-auto w-full sm:w-fit">
-                <TabsTrigger value="chatgpt" className="rounded-full px-4 sm:px-5 h-9 text-[13px] text-white/65 data-[state=active]:bg-[#007AFF] dark:data-[state=active]:bg-[#007AFF] data-[state=active]:text-white data-[state=active]:border-transparent dark:data-[state=active]:border-transparent data-[state=active]:shadow-[0_2px_12px_rgba(0,122,255,0.45)] transition-smooth">ChatGPT / GPT Agents</TabsTrigger>
-                <TabsTrigger value="claude" className="rounded-full px-4 sm:px-5 h-9 text-[13px] text-white/65 data-[state=active]:bg-[#007AFF] dark:data-[state=active]:bg-[#007AFF] data-[state=active]:text-white data-[state=active]:border-transparent dark:data-[state=active]:border-transparent data-[state=active]:shadow-[0_2px_12px_rgba(0,122,255,0.45)] transition-smooth">Claude Desktop</TabsTrigger>
-                <TabsTrigger value="cursor" className="rounded-full px-4 sm:px-5 h-9 text-[13px] text-white/65 data-[state=active]:bg-[#007AFF] dark:data-[state=active]:bg-[#007AFF] data-[state=active]:text-white data-[state=active]:border-transparent dark:data-[state=active]:border-transparent data-[state=active]:shadow-[0_2px_12px_rgba(0,122,255,0.45)] transition-smooth">Cursor / Windsurf / Cline</TabsTrigger>
-              </TabsList>
-              <TabsContent value="chatgpt" className="space-y-2">
-                <p className="text-[13px] text-white/60">
-                  في ChatGPT: Settings → Connectors → Create → Custom MCP server وضَع الرابط في حقل «Server URL».
-                </p>
-                <JsonBlock json={chatgptJson} onCopy={() => void copyText(chatgptJson, "نُسخ إعداد ChatGPT")} />
-              </TabsContent>
-              <TabsContent value="claude" className="space-y-2">
-                <p className="text-[13px] text-white/60">الصقها في ملف claude_desktop_config.json ثم أعد تشغيل Claude Desktop.</p>
-                <JsonBlock json={claudeJson} onCopy={() => void copyText(claudeJson, "نُسخ إعداد Claude")} />
-              </TabsContent>
-              <TabsContent value="cursor" className="space-y-2">
-                <p className="text-[13px] text-white/60">الصقها في mcp.json داخل إعدادات Cursor / Windsurf / Cline.</p>
-                <JsonBlock json={cursorJson} onCopy={() => void copyText(cursorJson, "نُسخ إعداد Cursor")} />
-              </TabsContent>
-            </Tabs>
-
-            <div className="flex flex-wrap gap-2.5">
-              {TOOLS.map((t) => (
-                <div key={t.name} className="glass-row rounded-2xl px-4 py-3 max-w-full transition-smooth">
-                  <code className="font-mono text-xs text-[#0A84FF] font-semibold" dir="ltr">
-                    {t.name}
-                  </code>
-                  <p className="text-[11px] text-white/60 mt-1">{t.desc}</p>
-                </div>
-              ))}
-            </div>
-
-            <div className="rounded-2xl border border-[#FF9F0A]/25 bg-[#FF9F0A]/[0.08] p-4 text-[13px] leading-relaxed text-[#FFD48A]">
-              الفيديو يحتاج دقائق: يعيد السيرفر task_id فورًا، ويتابَع تلقائيًا بـ get_task كل 10 ثوانٍ — وعند اكتمال
-              المهمة يُعرض الرابط في الدردشة ويتوقف. أثناء الانتظار يُبَث تقدم حي (Progress notifications) حتى لا تنقطع
-              العملية.
-            </div>
-          </CardContent>
-        </Card>
-      </main>
-
-      {/* ===================== الفوتر ===================== */}
-      <footer className="mt-auto border-t border-white/[0.06] bg-black/30 backdrop-blur-xl">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6 py-4 text-center text-xs text-white/55">
-          Meko MCP Media Generator — روابط فقط، لا تنزيل أي وسائط على السيرفر — التبديل التسلسلي للمفاتيح صامت تمامًا
-          أمام نموذج الذكاء الاصطناعي.
-        </div>
-      </footer>
-    </div>
-  );
-}
-
-function StatChip({ label, value, cls }: { label: string; value: number; cls: string }) {
-  return (
-    <div className="glass-row rounded-2xl p-3.5 text-center transition-smooth">
-      <div className={`text-2xl font-bold tracking-tight ${cls}`}>{value}</div>
-      <div className="text-[11px] text-white/55 mt-0.5">{label}</div>
-    </div>
-  );
-}
-
-function JsonBlock({ json, onCopy }: { json: string; onCopy: () => void }) {
-  return (
-    <div className="relative rounded-2xl border border-white/[0.08] bg-black/50 overflow-hidden">
-      <pre dir="ltr" className="overflow-x-auto p-4 text-left font-mono text-xs text-[#7EE8A2]/90">
-        {json}
-      </pre>
-      <Button
-        size="sm"
-        variant="outline"
-        className="absolute top-2.5 end-2.5 h-8 px-3.5 text-xs rounded-full border-white/[0.14] bg-white/[0.08] text-white hover:bg-white/[0.16] backdrop-blur-xl"
-        onClick={onCopy}
-      >
-        نسخ
-      </Button>
+      )}
     </div>
   );
 }
