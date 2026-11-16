@@ -279,22 +279,24 @@ async function ensureAudio(taskId: string, params: CodeVideoParams, deadline: nu
 async function ensureRender(taskId: string, params: CodeVideoParams, deadline: number, onProgress: (p: number, msg: string) => Promise<void> | void): Promise<boolean> {
   if (params.videoUrl) return true;
 
+  if (params.renderDispatched) {
+    // مُطلق سابقًا على العامل الخارجي — بانتظاره بغض النظر عن توفر التوكن الآن
+    // (الرندر الاحتياطي لن يعيد رندل مهمة مُطلقة خارجيًا)، مع حارس ركود يفشلها
+    // نهائيًا بعد المهلة
+    const at = Date.parse(params.dispatchedAt || "");
+    if (Number.isFinite(at) && Date.now() - at > GH_RENDER_STALE_MS) {
+      throw new MergerError(
+        `تجاوز الرندر الكامل على GitHub Actions مهلة الانتظار (${Math.round(GH_RENDER_STALE_MS / 60000)} دقيقة منذ الإطلاق) — راجع سجل الـ workflow ثم أعد إطلاقه يدويًا بالمعرفين نفسهما إن لزم.`,
+        undefined,
+        true,
+      );
+    }
+    await saveParams(taskId, params, { progress: 55, error_message: null });
+    return false;
+  }
+
   const token = await getGitHubToken();
   if (token) {
-    if (params.renderDispatched) {
-      // مُطلق سابقًا — بانتظار العامل، مع حارس ركود يفشل المهمة نهائيًا بعد المهلة
-      const at = Date.parse(params.dispatchedAt || "");
-      if (Number.isFinite(at) && Date.now() - at > GH_RENDER_STALE_MS) {
-        throw new MergerError(
-          `تجاوز الرندر الكامل على GitHub Actions مهلة الانتظار (${Math.round(GH_RENDER_STALE_MS / 60000)} دقيقة منذ الإطلاق) — راجع سجل الـ workflow ثم أعد إطلاقه يدويًا بالمعرفين نفسهما إن لزم.`,
-          undefined,
-          true,
-        );
-      }
-      await saveParams(taskId, params, { progress: 55, error_message: null });
-      return false;
-    }
-
     await onProgress(50, "تجهيز الحمولة وإطلاق الرندر الكامل FHD 30fps على GitHub Actions…");
     // أبعاد الجودة الكاملة والمعدل الثابت الناعم — يفرضان حتى على المهام القديمة
     // المُنشئة بأبعاد الرندر السريع كي يخرج العامل دائمًا بـ FHD

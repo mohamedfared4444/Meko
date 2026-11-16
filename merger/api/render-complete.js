@@ -32,11 +32,17 @@ module.exports = async (req, res) => {
     return send(res, 405, { error: "طريقة غير مسموحة — استخدم POST" });
   }
 
+  const op = String(req.query.op || "chunk");
+
+  // op=provision — إنشاء مهمة جديدة من عامل/مُشغل يدوي (task_id="new"):
+  // توليد المعرفين وتسجيل المهمة في Turso بمعرّف الإطلاق نفسه، فتُكتمل لاحقًا
+  // بنفس آلية القدرة (job_id المُسجل هو مفتاح التحديث)
+  if (op === "provision") return await handleProvision(req, res);
+
   const taskId = String(req.query.task_id || "");
   const jobId = String(req.query.job_id || "");
-  const op = String(req.query.op || "chunk");
   if (!UUID_RE.test(taskId) || !UUID_RE.test(jobId)) {
-    return send(res, 400, { error: "task_id و job_id مطلوبان بصيغة UUID" });
+    return send(res, 400, { error: "task_id و job_id مطلوبان بصيغة UUID (أو استخدم op=provision لإنشاء مهمة جديدة)" });
   }
 
   try {
@@ -58,11 +64,61 @@ module.exports = async (req, res) => {
     if (op === "finalize") return await handleFinalize(db, req, res, taskId, jobId, task);
     if (op === "progress") return await handleProgress(db, req, res, taskId);
     if (op === "failed") return await handleFailed(db, req, res, taskId, jobId);
-    return send(res, 400, { error: "op غير معروف — استخدم chunk أو finalize أو progress أو failed" });
+    return send(res, 400, { error: "op غير معروف — استخدم provision أو chunk أو finalize أو progress أو failed" });
   } catch (e) {
     return send(res, 500, { error: e instanceof Error ? e.message.slice(0, 400) : String(e) });
   }
 };
+
+// ---------------------------------------------------------------------------
+// op=provision — إنشاء مهمة رندر كامل جديدة (للمشغّل اليدوي أو اختبار E2E)
+
+async function handleProvision(req, res) {
+  let body = {};
+  try {
+    body = JSON.parse((await readBody(req, 2 * 1024 * 1024)).toString("utf8") || "{}") || {};
+  } catch {
+    return send(res, 400, { error: "جسم provision يجب أن يكون JSON صالحًا" });
+  }
+  const htmlCode = typeof body.html_code === "string" ? body.html_code : "";
+  if (htmlCode.trim().length < 100 || !/renderAtTime/.test(htmlCode)) {
+    return send(res, 400, { error: "html_code غير صالح — صفحة HTML ذاتية الاحتواء تعرّف window.renderAtTime مطلوبة (100 حرفًا على الأقل)" });
+  }
+  const crypto = require("crypto");
+  const taskId = crypto.randomUUID();
+  const jobId = crypto.randomUUID();
+  const width = Math.round(Number(body.width) || 1080);
+  const height = Math.round(Number(body.height) || 1920);
+  const fps = Math.round(Number(body.fps) || 30);
+  const duration = Number(body.duration_seconds) || 15;
+  const title = typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 200) : "فيديو برمجي — رندر كامل";
+  const params = {
+    title,
+    htmlCode,
+    voice: "",
+    aspectRatio: height >= width ? "9:16" : width >= height * 1.2 ? "16:9" : "1:1",
+    width,
+    height,
+    fps,
+    durationSeconds: duration,
+    stage: "render",
+    renderDispatched: true,
+    dispatchedAt: new Date().toISOString(),
+    ghJobId: jobId,
+    renderHost: "github-actions",
+    source: "provision",
+    failCount: 0,
+  };
+  if (typeof body.audio_url === "string" && body.audio_url) params.audioUrl = body.audio_url;
+  if (Array.isArray(body.word_timings) && body.word_timings.length >= 2) params.wordTimings = body.word_timings;
+
+  await ensureSchema();
+  await getDb().execute({
+    sql: `INSERT INTO tasks (id, model, type, prompt, params_json, status, progress) VALUES (?,?,?,?,?,?,?)`,
+    args: [taskId, CODE_VIDEO_MODEL, "video", `فيديو برمجي (رندر كامل): ${title}`.slice(0, 2000), JSON.stringify(params), "processing", 12],
+  });
+  return send(res, 200, { ok: true, task_id: taskId, job_id: jobId, title, width, height, fps, duration_seconds: duration });
+}
 
 // ---------------------------------------------------------------------------
 // قراءة المهمة واستخراج معرفات الإطلاق

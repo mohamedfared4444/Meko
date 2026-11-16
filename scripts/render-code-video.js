@@ -35,8 +35,9 @@ const { spawn, execFileSync } = require("child_process");
 // إعدادات ومدخلات
 
 const MERGER_BASE = (process.env.MERGER_BASE_URL || "https://meko-manger.vercel.app").replace(/\/+$/, "");
-const TASK_ID = String(process.env.INPUT_TASK_ID || "").trim();
-const JOB_ID = String(process.env.INPUT_JOB_ID || "").trim();
+// task_id/job_id = "new" (مشغّل يدوي): تُنشأ مهمة جديدة عبر op=provision ثم تُستخدم معرفاتها
+let TASK_ID = String(process.env.INPUT_TASK_ID || "").trim();
+let JOB_ID = String(process.env.INPUT_JOB_ID || "").trim();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const DEFAULT_WIDTH = 1080;
@@ -67,14 +68,22 @@ if (process.argv[2] === "--fail") {
 // الوضع الرئيسي
 
 async function main() {
-  if (!UUID_RE.test(TASK_ID) || !UUID_RE.test(JOB_ID)) {
-    throw new Error("INPUT_TASK_ID و INPUT_JOB_ID مطلوبان بصيغة UUID صالحة");
+  if ((TASK_ID === "new") !== (JOB_ID === "new")) {
+    throw new Error('task_id و job_id يجب أن يكونا معًا "new" (إنشاء مهمة جديدة) أو معرفين UUID صالحين');
   }
-  const startedAt = Date.now();
-  log(`المهمة ${TASK_ID} — مهمة الدمج ${JOB_ID}`);
+  if (TASK_ID !== "new" && (!UUID_RE.test(TASK_ID) || !UUID_RE.test(JOB_ID))) {
+    throw new Error("INPUT_TASK_ID و INPUT_JOB_ID مطلوبان بصيغة UUID صالحة أو \"new\" لإنشاء مهمة جديدة");
+  }
 
   // 1) الحمولة: رابط من meko-manger (أساسي) أو base64 من المدخلات
   const payload = await loadPayload();
+  if (TASK_ID === "new") {
+    const prov = await provisionTask(payload);
+    TASK_ID = prov.task_id;
+    JOB_ID = prov.job_id;
+    log(`مهمة جديدة أُنشئت عبر provision: ${TASK_ID} — مهمة الدمج ${JOB_ID}`);
+  }
+  const startedAt = Date.now();
   const html = String(payload.html_code || "");
   if (html.trim().length < 100 || !/renderAtTime/.test(html)) {
     throw new Error("كود المشهد غير صالح — يجب أن يكون صفحة HTML ذاتية الاحتواء تعرّف window.renderAtTime(t, duration, wordTimings)");
@@ -131,6 +140,33 @@ async function main() {
     }
   }
   throw new Error("فشل كل مسارات النشر (meko-manger ثم إصدار GitHub ثم Turso المباشر)");
+}
+
+// ---------------------------------------------------------------------------
+// إنشاء مهمة جديدة (المشغّل اليدوي — task_id="new")
+
+async function provisionTask(payload) {
+  const res = await fetchWithTimeout(
+    `${MERGER_BASE}/api/render-complete?op=provision`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        html_code: String(payload.html_code || ""),
+        title: String(payload.title || "فيديو برمجي — رندر كامل"),
+        width: Number(process.env.INPUT_WIDTH) || Number(payload.width) || DEFAULT_WIDTH,
+        height: Number(process.env.INPUT_HEIGHT) || Number(payload.height) || DEFAULT_HEIGHT,
+        fps: Number(process.env.INPUT_FPS) || Number(payload.fps) || DEFAULT_FPS,
+        duration_seconds: Number(process.env.INPUT_DURATION) || Number(payload.duration_seconds) || DEFAULT_DURATION,
+        audio_url: String(process.env.INPUT_AUDIO_URL || payload.audio_url || "") || null,
+        word_timings: payload.word_timings || null,
+      }),
+    },
+    30_000,
+  );
+  const text = await res.text();
+  if (!res.ok) throw new Error(`فشل provision (HTTP ${res.status}): ${text.slice(0, 200)}`);
+  return JSON.parse(text);
 }
 
 // ---------------------------------------------------------------------------
