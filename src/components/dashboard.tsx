@@ -79,7 +79,7 @@ function providerHint(provider: string) {
   if (provider === "cloudflare") {
     return (
       <p className="text-[11px] leading-relaxed text-white/50">
-        صيغتا مفتاح Cloudflare (مفصولة بنقطتين): <code dir="ltr" className="font-mono text-white/70">ACCOUNT_ID:API_TOKEN</code> للتوكن أو <code dir="ltr" className="font-mono text-white/70">ACCOUNT_ID:EMAIL:GLOBAL_API_KEY</code> لمفتاح API العام — يُخزَّن كما هو ويُفصل تلقائيًا عند التوليد (Bearer أو X-Auth-Email/X-Auth-Key).
+        صيغتا مفتاح Cloudflare (مفصولة بنقطتين): <code dir="ltr" className="font-mono text-white/70">ACCOUNT_ID:API_TOKEN</code> للتوكن أو <code dir="ltr" className="font-mono text-white/70">ACCOUNT_ID:EMAIL:GLOBAL_API_KEY</code> لمفتاح API العام — يُخزَّن كما هو ويُفصل تلقائيًا عند التوليد (Bearer أو X-Auth-Email/X-Auth-Key). المفتاح العام بالصيغة الجديدة <code dir="ltr" className="font-mono text-white/70">cfk_…</code> يُطبَّع تلقائيًا عند الإرسال (تُصغَّر البادئة فقط) ولا يُجرَّب أبدًا كتوكن Bearer.
       </p>
     );
   }

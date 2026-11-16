@@ -12,18 +12,10 @@ import type { Client, InValue } from "../../node_modules/@libsql/client/lib-esm/
 const DEFAULT_KEYS: Array<{ provider: string; label: string; api_key: string }> = [
   {
     provider: "cloudflare",
-    label: "Cloudflare 1",
-    api_key: "e08d09833bdaa2835596ae8ae3caaebe:Cfut_63ivjYzp1ducMT0pkoJSnZBZiuyi3iMCLlVqZGMJ10766b48",
-  },
-  {
-    provider: "cloudflare",
-    label: "Cloudflare 2",
-    api_key: "5e745500f924646c9c84d3142216b874:Cfut_LEZkFVhRprgHoOiL283e2Tlol9AuKgSRJmSdrNEv8b654e51",
-  },
-  {
-    provider: "cloudflare",
-    label: "Cloudflare 3",
-    api_key: "792d94d404114a4300d1ee1558996cb7:Cfut_8NWHyWI0KBJffgadVFB88xfQfzImC3wGcVzMJ8fB436369bc",
+    label: "Cloudflare Global Key",
+    // صيغة ثلاثية: ACCOUNT_ID:EMAIL:GLOBAL_API_KEY — مصادقة X-Auth-Email/X-Auth-Key
+    // (المفتاح العام بالصيغة الجديدة التي تبدأ بـ Cfk_)
+    api_key: "e08d09833bdaa2835596ae8ae3caaebe:mohamedfarid4109@gmail.com:Cfk_NUGDka8MsnVoIM9nF9nhRi3tYLbaVR59w1v6reai820b6fa9",
   },
   {
     provider: "pollinations",

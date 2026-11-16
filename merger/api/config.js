@@ -12,7 +12,7 @@ module.exports = async (req, res) => {
   res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
   res.end(
     JSON.stringify({
-      version: "1.0.0",
+      version: "1.0.1",
       maxSources: LIMITS.MAX_SOURCES(),
       sourceMaxMB: LIMITS.SOURCE_MAX_MB(),
       outputMaxMB: LIMITS.OUTPUT_MAX_MB(),

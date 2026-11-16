@@ -5,7 +5,7 @@ import { ProviderHttpError, type ProviderAdapter } from "./types-adapter";
  *
  * صيغتا المفتاح المخزن في قاعدة البيانات:
  *  1) ACCOUNT_ID:API_TOKEN            ← مصادقة توكن API (Bearer Token)
- *  2) ACCOUNT_ID:EMAIL:GLOBAL_API_KEY ← مصادقة مفتاح API العام القديم (Global API Key)
+ *  2) ACCOUNT_ID:EMAIL:GLOBAL_API_KEY ← مصادقة مفتاح API العام (Global API Key)
  *
  * النداء:
  *   POST https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/black-forest-labs/flux-1-schnell
@@ -13,6 +13,18 @@ import { ProviderHttpError, type ProviderAdapter } from "./types-adapter";
  *     الصيغة 2: X-Auth-Email: ${email} + X-Auth-Key: ${globalApiKey} (بلا Authorization)
  *     Content-Type: application/json
  *     {"prompt": prompt}
+ *
+ * قاعدة المصادقة الحاسمة (نهائية بلا استثناء): الصيغة الثلاثية تُرسل دائمًا
+ * بهيدرات X-Auth-Email / X-Auth-Key حتى لو بدأ المفتاح العام بـ Cfk_ أو كان
+ * طوله 52 حرفًا (الصيغة الجديدة لمفاتيح Global API Key من Cloudflare) —
+ * لا يُحوَّل أبدًا إلى Authorization: Bearer ولا يُجرَّب كتوكن، فالمفتاح العام
+ * توثيقه يعمل حصريًا عبر الترويستين مع بريد الحساب.
+ *
+ * تطبيع البادئة (اختبار حي 2026-11): فاليّد Cloudflare لحالة أحرف بادئة المفتاح
+ * العام الجديد — إرسال X-Auth-Key ببادئة Cfk_ كبيرة يعيد رفض 400/6103 «Invalid
+ * format for X-Auth-Key header» حتى لو كان المفتاح صالحًا، بينما البادئة الصغيرة
+ * cfk_ مع نفس الجسم (حساس لحالة الأحرف) تنجح في المصادقة والتوليد. لذا تُطبَّع
+ * البادئة فقط إلى cfk_ صغيرة عند الفصل، ويُحفظ جسم المفتاح كما هو حرفيًا.
  *
  * الاستجابة تقبل شكلين (يُفحص content-type ثم magic bytes كضمانة):
  *  - JSON يحتوي result.image بصيغة Base64 (الشكل الافتراضي لـ REST API)
@@ -43,7 +55,7 @@ const UPLOAD_TIMEOUT_MS = 12_000;
 /** أقل مهلة مفيدة للرفع — أقل من ذلك تعني نفاد الميزانية فلا مجد للمحاولة */
 const MIN_USEFUL_TIMEOUT_MS = 2_500;
 
-/** نوع المصادقة: توكن Bearer أو مفتاح API العام القديم (X-Auth-Email / X-Auth-Key) */
+/** نوع المصادقة: توكن Bearer أو مفتاح API العام (X-Auth-Email / X-Auth-Key) */
 type CloudflareAuth =
   | { kind: "bearer"; apiToken: string }
   | { kind: "globalKey"; email: string; globalApiKey: string };
@@ -58,7 +70,21 @@ export interface CloudflareCreds {
  *  - ACCOUNT_ID:API_TOKEN (جزآن) → مصادقة Bearer
  *  - ACCOUNT_ID:EMAIL:GLOBAL_API_KEY (ثلاثة أجزاء) → مصادقة مفتاح API العام
  * الأجزاء تُطهَّر من الفراغات، والبريد يجب أن يحتوي @ في الصيغة الثلاثية.
+ * ملاحظة: الصيغة الثلاثية لا تُحوَّل إلى Bearer إطلاقًا — حتى لو بدأ المفتاح
+ * بـ Cfk_ أو كان 52 حرفًا؛ تُرسل الترويستان دائمًا (بعد تطبيع بادئة cfk_).
  */
+
+/**
+ * تطبيع بادئة المفتاح العام الجديد (Global API Key بصيغة scannable):
+ * فاليّد Cloudflare لحالة أحرف البادئة فقط — «Cfk_» الكبيرة تُرفض بـ 6103
+ * «Invalid format for X-Auth-Key header»، و«cfk_» الصغيرة تُقبل.
+ * تُصغَّر البادئة فقط ويُحفظ جسم المفتاح كما هو (الجسم حساس لحالة الأحرف)،
+ * والمفتاح القديم hex (37 حرفًا) يمر كما هو بلا أي تعديل.
+ */
+function normalizeGlobalApiKey(key: string): string {
+  return /^cfk_/i.test(key) ? "cfk_" + key.slice(4) : key;
+}
+
 export function parseCloudflareKey(rawKey: string): CloudflareCreds {
   const parts = rawKey.trim().split(":").map((p) => p.trim()).filter((p) => p.length > 0);
   if (parts.length < 2) {
@@ -89,7 +115,7 @@ export function parseCloudflareKey(rawKey: string): CloudflareCreds {
     if (globalApiKey.length < 4) {
       throw new ProviderHttpError("مفتاح Cloudflare تالف — مفتاح API العام (GLOBAL_API_KEY) فارغ/قصير جدًا", 400);
     }
-    return { accountId, auth: { kind: "globalKey", email, globalApiKey } };
+    return { accountId, auth: { kind: "globalKey", email, globalApiKey: normalizeGlobalApiKey(globalApiKey) } };
   }
 
   throw new ProviderHttpError(
@@ -236,7 +262,10 @@ export const cloudflareAdapter: ProviderAdapter = {
     const startedAt = Date.now();
     const remainingMs = () => SYNC_BUDGET_MS - (Date.now() - startedAt);
 
-    // 1) نداء التوليد — الهيدرات حسب نوع المفتاح: Bearer أو X-Auth-Email/X-Auth-Key
+    // 1) نداء التوليد — الهيدرات حسب نوع المفتاح: Bearer أو X-Auth-Email/X-Auth-Key.
+    //    الصيغة الثلاثية تُرسل دائمًا بهيدرات المفتاح العام كما هي — حتى لو بدأ
+    //    المفتاح بـ Cfk_ أو كان 52 حرفًا — ولا يُجرَّب أبداً كتوكن Bearer.
+    //    أي فشل هنا يُعاد للمفتاح/المزود التالي مباشرة (بلا محاولات بديلة).
     const genBudget = Math.max(5_000, Math.min(GENERATION_TIMEOUT_MS, remainingMs()));
     let res: Response | null = null;
     let primaryError: unknown = null;
@@ -260,31 +289,6 @@ export const cloudflareAdapter: ProviderAdapter = {
       }
     }
 
-    // 1.5) بديل ذكي للصيغة الثلاثية: فشل بناء النداء نفسه (مثل ByteString بسبب
-    // بريد غير لاتيني أو نائب نصي منسوخ مثل «بريدك_الإلكتروني») → جرّب الجزء
-    // الثالث كتوكن Bearer مباشرة — لا يمر عبر هيدر البريد أصلًا. خطأ شائع:
-    // توكن API (يبدأ بـ Cf) يوضع في خانة Global API Key بالصيغة الثلاثية.
-    if (!res && creds.auth.kind === "globalKey") {
-      const left = Math.max(5_000, Math.min(GENERATION_TIMEOUT_MS, remainingMs()));
-      const timer = withTimeout(left);
-      try {
-        res = await fetch(`${CF_BASE}/accounts/${encodeURIComponent(creds.accountId)}/ai/run/${model}`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${creds.auth.globalApiKey}`,
-            "Content-Type": "application/json",
-            Accept: "application/json, image/*",
-          },
-          body: JSON.stringify({ prompt }),
-          signal: timer.signal,
-        });
-      } catch {
-        /* كلا الشكلين فشلا قبل النداء — رسالة الخطأ المجمّعة أدناه */
-      } finally {
-        timer.done();
-      }
-    }
-
     if (!res) {
       const raw =
         primaryError instanceof Error && primaryError.name === "AbortError"
@@ -299,31 +303,6 @@ export const cloudflareAdapter: ProviderAdapter = {
         );
       }
       throw new ProviderHttpError(`تعذر الوصول لـ Cloudflare Workers AI: ${raw}`, undefined);
-    }
-
-    // 1.6) نجح النداء لكن المصادقة رُفضت (400/401/403) والمفتاح بصيغة ثلاثية →
-    // جرّب الجزء الثالث كتوكن Bearer قبل التخلي — يُنقذ المفاتيح التي وُضع
-    // فيها توكن API في خانة المفتاح العام دون أي تعديل من المستخدم
-    if (!res.ok && (res.status === 400 || res.status === 401 || res.status === 403) && creds.auth.kind === "globalKey") {
-      const left = Math.max(5_000, Math.min(GENERATION_TIMEOUT_MS, remainingMs()));
-      const timer = withTimeout(left);
-      try {
-        const res2 = await fetch(`${CF_BASE}/accounts/${encodeURIComponent(creds.accountId)}/ai/run/${model}`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${creds.auth.globalApiKey}`,
-            "Content-Type": "application/json",
-            Accept: "application/json, image/*",
-          },
-          body: JSON.stringify({ prompt }),
-          signal: timer.signal,
-        });
-        if (res2.ok) res = res2; // نجح البديل — نكمل به
-      } catch {
-        /* أبقِ الاستجابة الأصلية — رسالة خطأها أوضح للمستخدم */
-      } finally {
-        timer.done();
-      }
     }
 
     // 2) قراءة الاستجابة — نقرأ الجسم كاملًا ثم نفحصه على مرحلتين:
@@ -368,9 +347,10 @@ export const cloudflareAdapter: ProviderAdapter = {
       }
 
       // تلميح الصيغة عند فشل مصادقة المفتاح العام — يساعد على تصحيح المفتاح فورًا
+      // (المفتاح العام قد يكون بالصيغة الجديدة التي تبدأ بـ cfk_ أو القديمة hex)
       const authHint =
         creds.auth.kind === "globalKey" && (res.status === 400 || res.status === 401 || res.status === 403)
-          ? " — إن كان الجزء الثالث من مفتاحك توكن API (يبدأ بـ Cf) فالصيغة الصحيحة هي ACCOUNT_ID:API_TOKEN (جزآن فقط)، ومفتاح API العام الحقيقي 37 حرفًا hex من صفحة My Profile"
+          ? " — تأكد أن الجزء الثاني بريد الحساب الصحيح وأن الجزء الثالث هو Global API Key من صفحة My Profile → API Tokens (الصيغة الجديدة تبدأ بـ cfk_ وتُطبَّع بادئتها تلقائيًا عند الإرسال، والقديمة 37 حرفًا hex)"
           : "";
 
       if (!res.ok) throw new ProviderHttpError((errMsg || `HTTP ${res.status} من Cloudflare`) + authHint, res.status);
