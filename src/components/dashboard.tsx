@@ -8,6 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
+import NewTaskModal from "@/components/new-task-modal";
 
 // ---------------------------------------------------------------------------
 // أنواع بيانات الواجهة
@@ -156,6 +157,7 @@ export default function Dashboard() {
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [keys, setKeys] = useState<KeyItem[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [tasksError, setTasksError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const [isLiveSyncing, setIsLiveSyncing] = useState(false);
@@ -226,6 +228,16 @@ export default function Dashboard() {
     };
   }, [loadTasks, loadKeys, loadHealth]);
 
+  /** بعد نجاح الإطلاق من النافذة المنبثقة: أغلقها واعرض المهمة فورًا في الشاشة المباشرة */
+  const handleTaskCreated = useCallback(
+    (_taskId: string, kind: "full" | "code") => {
+      setNewTaskOpen(false);
+      void loadTasks();
+      toast.success(kind === "full" ? "بدأ خط إنتاج الفيديو الكامل" : "بدأ رندر الأنيميشن البرمجي");
+    },
+    [loadTasks],
+  );
+
   // المهمتا الجاريتان للعرض الرئيسي — الأحدث أولًا
   const processing = tasks.filter((t) => t.status === "processing" || t.status === "pending");
   const completed = tasks.filter((t) => t.status === "completed");
@@ -234,6 +246,7 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen flex flex-row bg-background text-foreground">
       <Toaster richColors position="top-center" />
+      <NewTaskModal open={newTaskOpen} onOpenChange={setNewTaskOpen} onCreated={handleTaskCreated} />
       {/* الشريط الجانبي — ثابت على الشاشات الكبيرة، Drawer على الموبايل */}
       <aside className="hidden lg:flex w-[400px] shrink-0 flex-col border-e border-white/10 bg-[#0a0b0e]">
         <SidebarContent keys={keys} onKeysChanged={loadKeys} completed={completed} failed={failed} />
@@ -281,8 +294,18 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="ms-auto flex items-center gap-1.5 shrink-0">
+              <Button
+                onClick={() => setNewTaskOpen(true)}
+                className="h-8 gap-1.5 rounded-lg px-3 text-[12px] font-bold shadow-[0_0_16px_rgba(0,122,255,0.3)]"
+                title="إطلاق مهمة إنتاج فيديو من الـويب مباشرة"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+                مهمة جديدة
+              </Button>
               {stats && (
-                <span className="hidden sm:flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <span className="hidden md:flex items-center gap-1.5 text-[11px] text-muted-foreground">
                   <Chip>{processing.length} جارية</Chip>
                   <Chip>{completed.length} مكتملة</Chip>
                   <Chip>{failed.length} فاشلة</Chip>
@@ -489,7 +512,7 @@ function IdleState({ mcpEndpoint }: { mcpEndpoint: string }) {
       <div className="space-y-2">
         <h2 className="text-xl font-bold">النظام جاهز لاستقبال الطلبات</h2>
         <p className="text-sm text-muted-foreground leading-relaxed max-w-md">
-          لا توجد مهام جارية الآن. أرسل طلب توليد صور أو فيديو كامل عبر عميل MCP (Claude مثلاً)، وستظهر المهمة هنا فورًا وتتقدم وتكتمل تلقائيًا.
+          لا توجد مهام جارية الآن. أطلق مهمة بزر «مهمة جديدة» أعلى الشاشة، أو أرسل الطلب عبر عميل MCP (Claude مثلاً) — وستظهر المهمة هنا فورًا وتتقدم وتكتمل تلقائيًا.
         </p>
       </div>
       <div className="flex items-center gap-2 text-[11px] text-muted-foreground">

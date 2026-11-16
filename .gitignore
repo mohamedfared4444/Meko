@@ -73,3 +73,9 @@ upload/
 download/
 skills/
 components.json
+
+# local artifacts
+skills/
+tool-results/
+server.log
+*.tsbuildinfo
