@@ -159,6 +159,64 @@ export async function mergerVideocut(spec: {
   };
 }
 
+/** نتيجة فيديو الأنيميشن البرمجي — MP4 جاهز من مشهد HTML مُرندَر بـ Chromium */
+export interface MergerCodeVideoResult {
+  jobId: string;
+  videoUrl: string;
+  downloadUrl: string;
+  duration: number;
+  resolution: string;
+  /** المعدل الفعلي بعد الخفض التكيفي إن حصل */
+  fps: number;
+  frames: number;
+  size: number;
+  hadAudio: boolean;
+  /** هل وصلت توقيتات الكلمات إلى المشهد فعلاً؟ */
+  hadWordTimings: boolean;
+}
+
+/**
+ * POST /api/codevideo — تحويل صفحة HTML/CSS/SVG/JS ذاتية الاحتواء (تعرّف
+ * window.renderAtTime(t, duration, wordTimings)) إلى فيديو MP4: Chromium
+ * يلتقط الإطارات ويضخها عبر stdin في ffmpeg مع دمج الصوت الاختياري.
+ * word_timings: توقيتات الكلمات من Edge-TTS لمزامنة الأنيميشن مع النطق.
+ * duration_seconds: تُتجاهل عند وجود الصوت (مدة الصوت هي المرجع).
+ * النداء متزامن: الخدمة تعيد الفيديو النهائي في نفس الاستجابة (حتى ~58 ثانية).
+ */
+export async function mergerCodeVideo(spec: {
+  html_code: string;
+  audio_url?: string | null;
+  duration_seconds?: number | null;
+  fps?: number | null;
+  width?: number | null;
+  height?: number | null;
+  word_timings?: Array<{ start: number; end: number; text: string }> | null;
+}): Promise<MergerCodeVideoResult> {
+  const { status, body } = await mergerFetch(
+    "/api/codevideo",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec) },
+    58_000,
+  );
+  if (status < 200 || status >= 300) {
+    const err = typeof body.error === "string" ? body.error : `HTTP ${status} من خدمة الرندر البرمجي`;
+    throw new MergerError(err, status, true);
+  }
+  const videoUrl = typeof body.video_url === "string" ? body.video_url : "";
+  if (!videoUrl) throw new MergerError("استجابة الرندر البرمجي بلا رابط فيديو", 502, true);
+  return {
+    jobId: typeof body.jobId === "string" ? body.jobId : "",
+    videoUrl,
+    downloadUrl: typeof body.download_url === "string" ? body.download_url : videoUrl,
+    duration: typeof body.duration === "number" ? body.duration : 0,
+    resolution: typeof body.resolution === "string" ? body.resolution : "",
+    fps: typeof body.fps === "number" ? body.fps : 0,
+    frames: typeof body.frames === "number" ? body.frames : 0,
+    size: typeof body.size === "number" ? body.size : 0,
+    hadAudio: body.had_audio === true,
+    hadWordTimings: body.had_word_timings === true,
+  };
+}
+
 /**
  * تحليل الحالة دفاعيًا (قسم 7.2):
  * - أكمل: done|completed|complete|success|succeeded|finished

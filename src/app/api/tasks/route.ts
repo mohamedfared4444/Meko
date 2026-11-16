@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { refreshTask } from "@/lib/coordinator";
+import { CODE_VIDEO_MODEL } from "@/lib/codevideo";
 import { FULL_VIDEO_MODEL } from "@/lib/fullvideo";
 import { describeDbError, getTask, listRecentTasks, taskStats, updateTask } from "@/lib/turso";
 import type { MediaType, TaskRow, TaskStatus } from "@/lib/types";
@@ -99,6 +100,24 @@ function buildDetail(task: TaskRow): TaskDetail {
     lastNote: task.error_message,
     seo: null,
   };
+  if (task.model === CODE_VIDEO_MODEL) {
+    try {
+      const p = JSON.parse(task.params_json) as {
+        title?: string;
+        script?: string;
+        audioUrl?: string;
+        videoUrl?: string;
+        wordTimings?: unknown[];
+      };
+      detail.hasAudio = !!p.audioUrl;
+      detail.audioUrl = p.audioUrl ?? null;
+      // المرحلة: فيديو جاهز أو رندر جارٍ → الرندر، وإلا الصوت (بلا سكربت → الرندر مباشرة)
+      detail.stage = p.videoUrl || !p.script || p.audioUrl ? "render" : "audio";
+    } catch {
+      /* params تالفة — تُعرض الأساسيات فقط */
+    }
+    return detail;
+  }
   if (task.model !== FULL_VIDEO_MODEL) return detail;
   try {
     const p = JSON.parse(task.params_json) as {

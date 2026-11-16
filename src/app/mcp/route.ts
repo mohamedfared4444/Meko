@@ -8,6 +8,7 @@ import {
   runMerge,
 } from "@/lib/coordinator";
 import { runBatchVideos, runFullVideo } from "@/lib/fullvideo";
+import { runCodeVideo } from "@/lib/codevideo";
 import { generateVoiceover, SUPPORTED_VOICES } from "@/lib/tts";
 import { imageModelEnumValues, videoModelEnumValues } from "@/lib/models";
 import type { MediaType, TaskStatus } from "@/lib/types";
@@ -34,6 +35,7 @@ IMPORTANT: the server automatically switches API keys in strict order on any fai
 To concatenate several finished clips into one video, call merge_videos with 'urls' (direct links) or 'task_ids' (completed video tasks, in merge order); track it with get_task the same way. Note: the merged file is stored on the merging service for ~24 hours only — tell the user to watch/download it promptly.
 Use list_media to recall previously generated media from the database.
 For a complete automated video from a single topic call create_full_video (topic, duration_seconds, aspect_ratio 9:16|16:9, language en|ar, optional style/voice/custom_script/scenes/captions/voice_rate/voice_pitch/bg_music_url): it writes the script with Gemini (or uses your ready custom_script verbatim), generates narration audio via free Edge-TTS (with optional voice_rate like '+5%' and voice_pitch like '-2Hz' for livelier delivery), generates consistent scene images, and merges everything with Ken Burns motion + crossfades into one MP4 with synchronized captions burned in by default — pass bg_music_url to add background music (FFmpeg loops/trims it to the video duration, lowers it to ~-18dB with a 2s fade-out and mixes it under the voiceover). Every completed video also ships a ready-to-copy PUBLISH PACK in the target language: 3 click-worthy Shorts/Reels titles, an SEO description with call-to-action, and targeted hashtags — plus the video link and download link.
+For CODE-DRIVEN vector animation call render_code_video (title, html_code, optional script, voice, aspect_ratio 9:16|16:9|1:1): write ONE self-contained HTML/CSS/SVG/Canvas page defining the global function window.renderAtTime(t, duration, wordTimings) that draws the FULL scene state deterministically for any time t in [0, duration) — camera pan/zoom via transforms, SVG shapes, Arabic/English text (bundled fonts are injected automatically), charts, counters. If 'script' is passed, the server generates the voiceover with free Edge-TTS FIRST, sets the video duration to the ACTUAL audio duration and passes wordTimings ({start,end,text} in seconds) to renderAtTime so the animation syncs with every spoken word. The scene is rendered frame-by-frame with headless Chromium and encoded with FFmpeg into one MP4 — takes ~20-50 seconds; track with get_task every ~10 seconds. The response contains the video link and download link.
 For producing SEVERAL videos in one call use batch_create_videos (2–5 items, each with topic and optional custom_script/scenes, plus shared settings duration_seconds/aspect_ratio/language/style/voice/captions/voice_rate/voice_pitch/bg_music_url): it creates full-video-pipeline tasks in the database and returns their task_ids immediately — all of them progress automatically in the background (also visible live on the dashboard); track each with get_task every ~10 seconds.
 Use generate_audio for standalone voiceover MP3s (free Edge-TTS neural voices, English + Arabic, optional rate and pitch) — it returns the direct audio URL and exact duration in seconds.`;
 
@@ -435,6 +437,68 @@ function buildServer(): McpServer {
           voiceRate: args.voice_rate,
           voicePitch: args.voice_pitch,
           bgMusicUrl: args.bg_music_url,
+        });
+        if (outcome.kind === "failed" || outcome.kind === "invalid") return errText(outcome.text);
+        return okText(outcome.text);
+      } catch (e) {
+        return errText(`❌ حدث خطأ غير متوقع: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+  );
+
+  // 9) render_code_video — فيديو الأنيميشن البرمجي: كود Claude → إطارات Chromium → MP4
+  server.registerTool(
+    "render_code_video",
+    {
+      description:
+        "Render a CODE-DRIVEN 2D vector motion-graphics video: you write ONE self-contained HTML/CSS/SVG/Canvas page (html_code) that defines the global function window.renderAtTime(t, duration, wordTimings) drawing the FULL deterministic scene state for any time t in [0, duration) — SVG shapes, camera pan/zoom via transforms, animated charts, counters, Arabic/English text (bundled Arabic+Latin fonts are injected automatically, so <text> renders correctly). Optionally pass 'script' (voiceover text): the server then generates the narration with free Edge-TTS FIRST, sets the video duration to the ACTUAL audio duration, and passes wordTimings ({start,end,text} in seconds, sorted by start) to renderAtTime on EVERY frame so the animation syncs with each spoken word (e.g. highlight the current word). Without script the render is silent for duration_seconds (3–60, default 15). Sizes: 9:16 → 720x1280, 16:9 → 1280x720, 1:1 → 960x960 at 24fps. Rendering (headless Chromium frame capture + FFmpeg H.264 encode) takes ~20-50 seconds: you get live progress and a task_id — call get_task every ~10 seconds until completed, then show the video and download links (stored ~24 hours).",
+      inputSchema: {
+        title: z.string().min(1).max(200).describe("Video title, e.g. 'How vaccines work' or 'الرسم البياني لمبيعات 2026'."),
+        html_code: z
+          .string()
+          .min(100)
+          .max(300000)
+          .describe(
+            "Self-contained HTML page (inline CSS/JS only, no external assets) sized for the video and defining window.renderAtTime(t, duration, wordTimings) inside a <script> tag. It MUST draw the complete scene state for the given t (idempotent, deterministic — no reliance on CSS transitions or time passing). t is in seconds within [0, duration). wordTimings (when provided) is an array of {start, end, text} in seconds — use it to highlight/animate the currently spoken word. Keep per-frame work light (<50ms) so rendering fits the time budget; avoid heavy filters/shadows per element.",
+          ),
+        script: z
+          .string()
+          .min(1)
+          .max(6000)
+          .optional()
+          .describe(
+            "Optional voiceover text. When passed: audio is generated with Edge-TTS first, video duration automatically matches the ACTUAL audio duration, and wordTimings are passed to renderAtTime for word-level sync. Omit for a silent video.",
+          ),
+        voice: z
+          .enum(SUPPORTED_VOICES as [string, ...string[]])
+          .default("en-US-AndrewNeural")
+          .describe("Edge-TTS voice for the optional script. Arabic: ar-EG-ShakirNeural / ar-SA-HamedNeural / ar-EG-SalmaNeural. English: en-US-AndrewNeural (default) / en-US-AriaNeural / en-GB-RyanNeural."),
+        aspect_ratio: z
+          .enum(["9:16", "16:9", "1:1"])
+          .default("9:16")
+          .describe("9:16 → 720x1280 (Shorts/Reels/TikTok), 16:9 → 1280x720 (YouTube), 1:1 → 960x960."),
+        duration_seconds: z
+          .number()
+          .int()
+          .min(3)
+          .max(60)
+          .default(15)
+          .describe("Silent-video duration in seconds (3–60, default 15). IGNORED when 'script' is passed — the audio duration controls the video length then.")
+          .optional(),
+        wait_seconds: z.number().int().min(0).max(240).default(45).describe("How long to wait in this call before returning a task_id.").optional(),
+      },
+    },
+    async (args, extra) => {
+      try {
+        const outcome = await runCodeVideo({
+          title: args.title,
+          htmlCode: args.html_code,
+          script: args.script,
+          voice: args.voice,
+          aspectRatio: args.aspect_ratio ?? "9:16",
+          durationSeconds: args.duration_seconds,
+          waitSeconds: args.wait_seconds ?? 45,
+          onProgress: makeProgressBridge(extra as HandlerExtra),
         });
         if (outcome.kind === "failed" || outcome.kind === "invalid") return errText(outcome.text);
         return okText(outcome.text);

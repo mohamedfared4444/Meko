@@ -31,6 +31,7 @@ const uploadHandler = require("./api/upload");
 const configHandler = require("./api/config");
 const cronHandler = require("./api/cron");
 const videocutHandler = require("./api/videocut");
+const codevideoHandler = require("./api/codevideo");
 
 const PORT = Number(process.env.PORT || 8787);
 
@@ -77,6 +78,7 @@ const server = http.createServer((req, res) => {
   }
   if (pathname === "/api/upload") return wrap(uploadHandler)(req, res);
   if (pathname === "/api/videocut") return wrap(videocutHandler)(req, res);
+  if (pathname === "/api/codevideo") return wrap(codevideoHandler)(req, res);
   if (pathname === "/api/config") return wrap(configHandler)(req, res);
   if (pathname === "/api/cron") return wrap(cronHandler)(req, res);
 

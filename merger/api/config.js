@@ -20,6 +20,16 @@ module.exports = async (req, res) => {
       uploadChunkBytes: LIMITS.UPLOAD_CHUNK_BYTES,
       retentionHours: 24,
       output: { container: "mp4", video: "libx264 CRF 18", audio: "aac 192k/44100Hz" },
+      codevideo: {
+        endpoint: "/api/codevideo",
+        contract: "html_code with window.renderAtTime(t, duration, wordTimings) → MP4 frames via headless Chromium + ffmpeg image2pipe",
+        defaultDurationSec: 15,
+        maxDurationSec: 60,
+        defaultFps: 24,
+        fpsRange: [8, 30],
+        defaultSize: "720x1280",
+        sizeRange: [240, 1280],
+      },
     }),
   );
 };

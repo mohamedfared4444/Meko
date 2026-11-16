@@ -77,6 +77,8 @@ interface TasksResponse {
 
 /** خط إنتاج الفيديو الكامل — يعرض متتبع مراحل خاص */
 const FULL_VIDEO_MODEL = "full-video-pipeline";
+/** الفيديو البرمجي (render_code_video) — متتبع مراحل خاص أيضًا */
+const CODE_VIDEO_MODEL = "code-video-pipeline";
 
 const PROVIDER_LABELS: Record<string, string> = {
   cloudflare: "Cloudflare",
@@ -107,6 +109,12 @@ const PIPELINE_STAGES: Array<{ id: string; label: string }> = [
   { id: "merge", label: "دمج الفيديو" },
 ];
 
+/** مراحل الفيديو البرمجي — صوت اختياري ثم رندر الإطارات */
+const CODE_VIDEO_STAGES: Array<{ id: string; label: string }> = [
+  { id: "audio", label: "التعليق الصوتي" },
+  { id: "render", label: "رندر الإطارات" },
+];
+
 // ---------------------------------------------------------------------------
 // أدوات عرض صغيرة
 
@@ -135,6 +143,7 @@ function isHttpUrl(u: string): boolean {
 
 function modelLabel(model: string): string {
   if (model === FULL_VIDEO_MODEL) return "خط إنتاج فيديو كامل";
+  if (model === CODE_VIDEO_MODEL) return "فيديو أنيميشن برمجي";
   return model;
 }
 
@@ -365,11 +374,14 @@ const STAGE_LABELS: Record<string, string> = {
   audio: "توليد التعليق الصوتي",
   images: "توليد صور المشاهد",
   merge: "دمج الفيديو النهائي",
+  render: "رندر إطارات المشهد بـ Chromium",
 };
 
 function ActiveTaskCard({ task, now: _now }: { task: TaskItem; now: number }) {
   const isPipeline = task.model === FULL_VIDEO_MODEL;
-  const stageIndex = isPipeline ? Math.max(0, PIPELINE_STAGES.findIndex((s) => s.id === (task.detail?.stage ?? "script"))) : -1;
+  const isCodeVideo = task.model === CODE_VIDEO_MODEL;
+  const stages = isCodeVideo ? CODE_VIDEO_STAGES : PIPELINE_STAGES;
+  const stageIndex = isPipeline || isCodeVideo ? Math.max(0, stages.findIndex((s) => s.id === (task.detail?.stage ?? stages[0].id))) : -1;
   const provider = task.detail?.currentProvider;
 
   return (
@@ -377,6 +389,7 @@ function ActiveTaskCard({ task, now: _now }: { task: TaskItem; now: number }) {
       <div className="px-4 sm:px-5 pt-4 pb-3 border-b border-white/5">
         <div className="flex items-center gap-2 flex-wrap">
           {isPipeline && <Badge className="bg-primary/20 text-primary border-primary/40 hover:bg-primary/20">خط إنتاج فيديو كامل</Badge>}
+          {isCodeVideo && <Badge className="bg-primary/20 text-primary border-primary/40 hover:bg-primary/20">رندر برمجي</Badge>}
           <Badge variant="outline" className="bg-white/5 text-muted-foreground border-white/15 hover:bg-white/5">
             {modelLabel(task.model)}
           </Badge>
@@ -402,10 +415,10 @@ function ActiveTaskCard({ task, now: _now }: { task: TaskItem; now: number }) {
           <Progress value={task.progress} className="h-2" />
         </div>
 
-        {/* متتبع مراحل خط الإنتاج */}
-        {isPipeline && stageIndex >= 0 && (
+        {/* متتبع مراحل خط الإنتاج / الفيديو البرمجي */}
+        {(isPipeline || isCodeVideo) && stageIndex >= 0 && (
           <div className="flex items-center gap-1 sm:gap-1.5">
-            {PIPELINE_STAGES.map((s, i) => (
+            {stages.map((s, i) => (
               <div key={s.id} className="flex-1 flex flex-col items-center gap-1.5">
                 <div
                   className={`w-2.5 h-2.5 rounded-full transition-colors ${
@@ -422,6 +435,13 @@ function ActiveTaskCard({ task, now: _now }: { task: TaskItem; now: number }) {
 
         {/* تفاصيل الخطوات الحية */}
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          {isCodeVideo && (
+            <DetailCell
+              label="التعليق الصوتي"
+              value={task.detail?.hasAudio ? "جاهز ومتزامن" : "اختياري"}
+              accent={task.detail?.hasAudio}
+            />
+          )}
           {isPipeline && task.detail?.scenesTotal != null && (
             <DetailCell label="صور المشاهد" value={`${task.detail.scenesDone ?? 0} / ${task.detail.scenesTotal}`} accent={task.detail.scenesDone === task.detail.scenesTotal} />
           )}

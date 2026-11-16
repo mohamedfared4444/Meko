@@ -7,13 +7,16 @@
   "scripts": {
     "dev": "node server.js",
     "start": "node server.js",
-    "test:unit": "node scripts/test-unit.js",
+    "test:codevideo": "node scripts/test-codevideo.js",
+    "test:codevideo:scale": "node scripts/test-codevideo-scale.js",
     "test:arabic": "node scripts/test-arabic-text.js",
     "test:http": "node scripts/test-http.js"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
+    "@sparticuz/chromium": "^130.0.0",
     "ffmpeg-static": "^5.2.0",
-    "ffprobe-static": "^3.1.0"
+    "ffprobe-static": "^3.1.0",
+    "puppeteer-core": "^23.11.1"
   }
 }

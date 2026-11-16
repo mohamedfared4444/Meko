@@ -5,6 +5,7 @@ import { findModel } from "./models";
 import { getAdapter } from "./providers/registry";
 import type { ApiKeyRow, AttemptRecord, MediaType, ModelDef, ProviderId, TaskRow, TaskStatus } from "./types";
 import { formatFullVideoCompleted, FULL_VIDEO_MODEL, refreshFullVideoTask } from "./fullvideo";
+import { CODE_VIDEO_MODEL, formatCodeVideoCompleted, refreshCodeVideoTask } from "./codevideo";
 import { getApiKey, disabledKeySummaries, getKeyPool, getTask, insertTask, listRecentTasks, recordKeyUsage, updateTask } from "./turso";
 import type { ProviderCheckResult } from "./providers/types-adapter";
 
@@ -681,6 +682,7 @@ export async function refreshTask(taskId: string, onProgressBridge?: (progress: 
   }
   if (task.status === "completed") {
     if (task.model === FULL_VIDEO_MODEL) return { kind: "completed", taskId, urls: resultUrls(task), text: formatFullVideoCompleted(task) };
+    if (task.model === CODE_VIDEO_MODEL) return { kind: "completed", taskId, urls: resultUrls(task), text: formatCodeVideoCompleted(task) };
     return { kind: "completed", taskId, urls: resultUrls(task), text: formatCompleted(task) };
   }
   if (task.status === "failed") return { kind: "failed", taskId, text: formatFailed(task) };
@@ -691,6 +693,11 @@ export async function refreshTask(taskId: string, onProgressBridge?: (progress: 
   if (task.model === FULL_VIDEO_MODEL) {
     const step = await refreshFullVideoTask(task, onProgressBridge);
     return step;
+  }
+
+  // الفيديو البرمجي (render_code_video) — آلة حالات مستقلة قابلة للاستكمال
+  if (task.model === CODE_VIDEO_MODEL) {
+    return await refreshCodeVideoTask(task, onProgressBridge);
   }
 
   const model = findModel(task.model);
