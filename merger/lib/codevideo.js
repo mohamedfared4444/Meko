@@ -195,7 +195,8 @@ function sanitizeWordTimings(raw) {
  *  AWS_EXECUTION_ENV/AWS_LAMBDA_JS_RUNTIME — وإن غابا (كما على بيئات Vercel
  *  الحالية) فلن تُستخرج أرشيفات المكتبات al2/al2023 ولن يُضبط LD_LIBRARY_PATH،
  *  فيُطلق «libnss3.so: cannot open shared object» رغم تضمين الأرشيفات في الحزمة.
- *  هنا نستخرج الأرشيف الناقص بأنفسنا (نفس آلية الحزمة: inflate) ونضبط المتغير. */
+ *  هنا نستخرج الأرشيف الناقص بأنفسنا (نفس آلية الحزمة: inflate) ونضبط المتغير.
+ *  الأرشيفات تُفك إلى /tmp/al2/lib و /tmp/al2023/lib — لذا العلامة lib/libnss3.so */
 async function ensureChromiumLibs() {
   try {
     const binDir = path.join(__dirname, "..", "node_modules", "@sparticuz/chromium", "bin");
@@ -205,7 +206,7 @@ async function ensureChromiumLibs() {
     ];
     const available = [];
     for (const { libDir, archive } of libTargets) {
-      const marker = path.join(libDir, "libnss3.so");
+      const marker = path.join(libDir, "lib", "libnss3.so");
       if (!fs.existsSync(marker)) {
         const src = path.join(binDir, archive);
         if (!fs.existsSync(src)) continue;
