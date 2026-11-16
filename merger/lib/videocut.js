@@ -37,18 +37,27 @@ const PER_IMAGE_DEFAULT = 3.5; // بلا صوت — مدة كل صورة بال�
 const FFMPEG_FPS = 30;
 const CAPTIONS_MAX_BYTES = 2 * 1048576;
 
-/** خط عربي/إنجليزي مضمّن مع الخدمة للترجمة (مسار ثابت ليُحتويه نشر Vercel)
- *  المصدر: Noto Sans Arabic (SIL OFL 1.1) — github.com/notofonts/arabic.
- *  نقرأه من القرص مرة واحدة عند تحميل الوحدة: نشر Vercel (NFT) يتتبع
- *  readFileSync بمسار ثابت فيضمّن الملف في الـ lambda حتمًا، وفي زمن التشغيل
- *  نكتبه من الذاكرة إلى tmpDir — فلا اعتماد إطلاقًا على خطوط نظام الاستضافة. */
-const CAPTIONS_FONT_FILE = path.join(__dirname, "..", "fonts", "NotoSansArabic-Regular.ttf");
+/** خطوط عربي/لاتيني مضمّنة مع الخدمة للترجمة (مسارات ثابتة ليُحتويها نشر Vercel)
+ *  - Noto Sans Arabic: العربية بأشكال اتصال كاملة (GSUB) + أرقام وترقيم أساسي —
+ *    المصدر: Noto Sans Arabic (SIL OFL 1.1) — github.com/notofonts/arabic.
+ *  - Liberation Sans: اللاتينية A-Z/a-z (خط Noto Sans Arabic لا يحتوي حروفًا
+ *    لاتينية إطلاقًا — بلا هذا الخط تظهر الكلمات الإنجليزية مربعات tofu على
+ *    lambda بلا أي خطوط نظام) — SIL OFL 1.1 — github.com/liberationfonts.
+ *  نقرأها من القرص مرة واحدة عند تحميل الوحدة: نشر Vercel (NFT) يتتبع
+ *  readFileSync بمسار ثابت فيضمّن الملفات في الـ lambda حتمًا، وفي زمن التشغيل
+ *  نكتبها من الذاكرة إلى tmpDir — فلا اعتماد إطلاقًا على خطوط نظام الاستضافة. */
 const CAPTIONS_FONT_FAMILY = "Noto Sans Arabic";
-let CAPTIONS_FONT_BYTES = null;
-try {
-  CAPTIONS_FONT_BYTES = fs.readFileSync(CAPTIONS_FONT_FILE);
-} catch {
-  /* على الاستضافة المحلية قد يغيب الخط — نكمل ببدائل النظام */
+const CAPTIONS_FONT_FILES = {
+  "NotoSansArabic-Regular.ttf": path.join(__dirname, "..", "fonts", "NotoSansArabic-Regular.ttf"),
+  "LiberationSans-Regular.ttf": path.join(__dirname, "..", "fonts", "LiberationSans-Regular.ttf"),
+};
+const CAPTIONS_FONT_BYTES = {};
+for (const [name, file] of Object.entries(CAPTIONS_FONT_FILES)) {
+  try {
+    CAPTIONS_FONT_BYTES[name] = fs.readFileSync(file);
+  } catch {
+    /* على الاستضافة المحلية قد يغيب الخط — نكمل ببدائل النظام */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -183,22 +192,31 @@ function buildSubtitleFilter(srtPath, opts = {}) {
   return `subtitles=${parts.join(":")}`;
 }
 
-/** ملف fontconfig مؤقت يجعل الخط المضمّن مرئيًا لـ libass بلا اعتماد على النظام */
+/** ملف fontconfig مؤقت يجعل الخطوط المضمّنة مرئية لـ libass بلا اعتماد على النظام */
 function writeFontConfig(tmpDir) {
   const confPath = path.join(tmpDir, "fonts.conf");
-  // تجسيد الخط المضمّن من الذاكرة إلى tmpDir (يعمل حتى لو غاب عن قراءة /var/task)
+  // تجسيد الخطوط المضمّنة من الذاكرة إلى tmpDir (يعمل حتى لو غابت عن قراءة /var/task)
   let fontDir = null;
-  if (CAPTIONS_FONT_BYTES) {
+  const entries = Object.entries(CAPTIONS_FONT_BYTES);
+  if (entries.length > 0) {
     try {
       fontDir = path.join(tmpDir, "fonts");
       fs.mkdirSync(fontDir, { recursive: true });
-      fs.writeFileSync(path.join(fontDir, "NotoSansArabic-Regular.ttf"), CAPTIONS_FONT_BYTES);
+      for (const [name, bytes] of entries) {
+        fs.writeFileSync(path.join(fontDir, name), bytes);
+      }
     } catch {
       fontDir = null;
     }
   }
-  if (!fontDir && fs.existsSync(CAPTIONS_FONT_FILE)) {
-    fontDir = path.dirname(CAPTIONS_FONT_FILE);
+  if (!fontDir) {
+    // رجوع للاستضافة المحلية: مجلد الخطوط موجود على القرص مباشرة؟
+    for (const file of Object.values(CAPTIONS_FONT_FILES)) {
+      if (fs.existsSync(file)) {
+        fontDir = path.dirname(file);
+        break;
+      }
+    }
   }
   const dirs = [
     fontDir ? `<dir>${fontDir}</dir>` : "",
