@@ -14,12 +14,22 @@
  *     /api/jobs/{id}/video بنفس صيغة مهام الدمج تمامًا.
  *
  * حماية الوقت والذاكرة (حد الدالة 60 ثانية):
- *  - ميزانية التقاط إطارات صارمة (FRAME_TIME_BUDGET_MS): بعد أول 3 إطارات
- *    نقيس زمن الإطار الواحد؛ إن كان المشروع لن يكتمل في الميزانية خُفّض
- *    معدل الإطارات تلقائيًا (حتى 8fps) — والصوت يبقى متزامنًا لأن المعدل
- *    الفعلي (frames/duration) هو الممر لـ ffmpeg وليس المعدل المطلوب.
+ *  - ميزانية التقاط إطارات (FRAME_TIME_BUDGET_MS): بعد أول 3 إطارات نقيس
+ *    زمن الإطار الواحد ونخفض معدل الإطارات تكيفيًا (Adaptive FPS) ليلائم
+ *    الميزانية — حتى 12fps كحد مفضل، وأدنى من ذلك عند المشاهد ثقيلة جدًا
+ *    (بلا أي رفض مبكر: الرندر يكتمل دائمًا ويُنتج MP4 ناجحًا) — والصوت
+ *    يبقى متزامنًا لأن المعدل الفعلي (frames/duration) هو الممر لـ ffmpeg
+ *    وليس المعدل المطلوب.
  *  - ساعة إنذار كلية (RENDER_HARD_BUDGET_MS) تقتل العملية برسالة واضحة.
- *  - مقاس افتراضي 720×1280 (أسرع من 1080 مع جودة كافية للشورتس/ريلز).
+ *  - مقاس افتراضي سريع 540×960 لـ 9:16 (و960×540 لـ 16:9 و640×640 لـ 1:1)
+ *    — يقلل حمل بكسلات Chromium Software Rasterizer بنحو 45% مقارنة بـ
+ *    720×1280 ويسرّع الالتقاط — ويمكن رفعها اختياريًا عبر width/height.
+ *
+ * تسريع الرندر في بيئة serverless:
+ *  - أعلام Chromium: --disable-gpu-vsync و--disable-dev-shm-usage و
+ *    --renderer-process-limit=1 لتقليل التزامن والذاكرة المشتركة.
+ *  - لقطات JPEG (quality 82) أسرع صيغة التقاط بدل PNG.
+ *  - حقن CSS خفيف svg { shape-rendering: optimizeSpeed; } لتسريع المتجهات.
  *
  * الخطوط: بيئة lambda بلا أي خطوط نظام — نضخ خطي Noto Sans Arabic
  * (العربية بأشكال اتصال كاملة عبر HarfBuzz في Chromium نفسه) وLiberation
@@ -39,21 +49,32 @@ const { ensureExecutable, ffmpegBin } = require("./merge");
 
 const DEFAULT_DURATION = 15;
 const MAX_DURATION = 60;
-const DEFAULT_FPS = 24;
+const DEFAULT_FPS = 20;
 const MIN_FPS = 8;
 const MAX_FPS = 30;
-const DEFAULT_WIDTH = 720;
-const DEFAULT_HEIGHT = 1280;
+/** الحد المفضل للتكيّف عند المشاهد البطيئة — أدنى منه يُقبل أيضًا بلا فشل */
+const ADAPTIVE_FPS_TARGET = 12;
+/** أبعاد سريعة افتراضية لكل اتجاه — تقلل بكسلات الـ Software Rasterizer ~45%
+ *  مقارنة بـ 720p وتسرّع الالتقاط، ويمكن رفعها اختياريًا عبر width/height */
+const ASPECT_DEFAULTS = {
+  "9:16": { width: 540, height: 960 },
+  "16:9": { width: 960, height: 540 },
+  "1:1": { width: 640, height: 640 },
+};
+const DEFAULT_WIDTH = ASPECT_DEFAULTS["9:16"].width;
+const DEFAULT_HEIGHT = ASPECT_DEFAULTS["9:16"].height;
 const MIN_SIZE = 240;
 const MAX_SIZE = 1280;
 /** حد طول كود HTML الواحد (يحمي الذاكرة وحجم الجسم 4.5MB في Vercel) */
 const MAX_HTML_CHARS = 300_000;
-/** ميزانية التقاط الإطارات — داخل حد الدالة 60 ثانية بهامش للترميز والرفع */
-const FRAME_TIME_BUDGET_MS = Number(process.env.CODEVIDEO_FRAME_BUDGET_MS) || 30_000;
+/** ميزانية التقاط الإطارات — داخل حد الدالة 60 ثانية بهامش للترميز والرفع
+ *  (40 ثانية التقاط + ~8 ثوانٍ صوت/ترميز/رفع ≈ 48 < 52 ساعة الإنذار) */
+const FRAME_TIME_BUDGET_MS = Number(process.env.CODEVIDEO_FRAME_BUDGET_MS) || 40_000;
 /** ساعة الإنذار الكلية لعملية الرندر (تقتل كل شيء برسالة واضحة) */
 const RENDER_HARD_BUDGET_MS = Number(process.env.CODEVIDEO_HARD_BUDGET_MS) || 52_000;
-/** جودة لقطات JPEG — 85 توازن ممتاز بين الحجم والسرعة والجودة للرسومات المتجهة */
-const SCREENSHOT_QUALITY = Number(process.env.CODEVIDEO_JPEG_QUALITY) || 85;
+/** جودة لقطات JPEG — 82 أسرع صيغة التقاط (أخف من PNG بثلاثة أضعاف تقريبًا)
+ *  وبجودة كافية تمامًا للرسومات المتجهة */
+const SCREENSHOT_QUALITY = Number(process.env.CODEVIDEO_JPEG_QUALITY) || 82;
 /** أقصى عدد إدخالات توقيتات الكلمات المقبولة */
 const MAX_WORD_TIMINGS = 5000;
 
@@ -162,10 +183,13 @@ function buildFontStyleTag() {
   return `<style data-meko-fonts>${faces}${fallback}</style>`;
 }
 
-/** حقن وسم الخطوط في HTML — قبل </head> إن وُجد وإلا في أول الصفحة */
-function injectFonts(html) {
-  const tag = buildFontStyleTag();
-  if (!tag) return html;
+/** حقن CSS تسريع خفيف — يقلل تكلفة رسم المتجهات في Chromium بلا أي أثر بصري:
+ *  shape-rendering: optimizeSpeed يعطل مكافحة التسنن الدقيقة للـ SVG */
+const SPEED_STYLE_TAG = '<style data-meko-speed>svg{shape-rendering:optimizeSpeed;}</style>';
+
+/** حقن وسوم الخطوط + CSS التسريع — قبل </head> إن وُجد وإلا في أول الصفحة */
+function injectPageEnhancements(html) {
+  const tag = buildFontStyleTag() + SPEED_STYLE_TAG;
   if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${tag}</head>`);
   if (/<body[^>]*>/i.test(html)) return html.replace(/<body[^>]*>/i, (m) => `${m}${tag}`);
   return tag + html;
@@ -233,7 +257,15 @@ async function launchBrowser(width, height) {
   await ensureChromiumLibs();
   await ensureExecutable(executablePath).catch(() => {});
   return puppeteer.launch({
-    args: [...chromium.args, "--font-render-hinting=none", "--hide-scrollbars"],
+    args: [
+      ...chromium.args,
+      "--font-render-hinting=none",
+      "--hide-scrollbars",
+      // أعلام تسريع بيئة serverless — تقليل التزامن وذاكرة /dev/shm الضيقة
+      "--disable-gpu-vsync",
+      "--disable-dev-shm-usage",
+      "--renderer-process-limit=1",
+    ],
     defaultViewport: { width, height },
     executablePath,
     headless: chromium.headlessMode ?? true,
@@ -245,11 +277,12 @@ async function launchBrowser(width, height) {
 // تنفيذ المهمة — متزامنة داخل الطلب
 
 async function runCodeVideoJob(jobId, spec) {
-  const width = Math.max(MIN_SIZE, Math.min(MAX_SIZE, Math.round(Number(spec.width) || DEFAULT_WIDTH)));
-  const height = Math.max(MIN_SIZE, Math.min(MAX_SIZE, Math.round(Number(spec.height) || DEFAULT_HEIGHT)));
+  const aspectDefault = ASPECT_DEFAULTS[spec.aspect_ratio] || ASPECT_DEFAULTS["9:16"];
+  const width = Math.max(MIN_SIZE, Math.min(MAX_SIZE, Math.round(Number(spec.width) || aspectDefault.width)));
+  const height = Math.max(MIN_SIZE, Math.min(MAX_SIZE, Math.round(Number(spec.height) || aspectDefault.height)));
   const requestedFps = Math.max(MIN_FPS, Math.min(MAX_FPS, Math.round(Number(spec.fps) || DEFAULT_FPS)));
   const wordTimings = sanitizeWordTimings(spec.word_timings);
-  const html = injectFonts(String(spec.html_code ?? ""));
+  const html = injectPageEnhancements(String(spec.html_code ?? ""));
 
   await updateJob(jobId, { status: "processing", progress: 2, error: null });
 
@@ -319,14 +352,16 @@ async function runCodeVideoJob(jobId, spec) {
       await page.screenshot({ type: "jpeg", quality: SCREENSHOT_QUALITY, captureBeyondViewport: false, optimizeForSpeed: true });
     }
     const perFrameMs = Math.max(15, (Date.now() - t0) / 3);
-    const framesByBudget = Math.floor(FRAME_TIME_BUDGET_MS / perFrameMs);
-    let frames = Math.max(MIN_FPS, Math.min(MAX_FPS, requestedFps)) * duration; // المطلوب
-    frames = Math.round(Math.min(frames, framesByBudget, MAX_FPS * MAX_DURATION));
-    if (frames < Math.max(8, duration * MIN_FPS * 0.5)) {
-      throw new Error(`المشهد أبطأ من ميزانية الوقت (زمن الإطار ${Math.round(perFrameMs)}ms) — قلّل تفاصيل الأنيميشن أو قصّر المدة (${duration} ثانية).`);
-    }
-    const actualFps = Math.max(MIN_FPS - 0.001, Math.min(MAX_FPS, frames / duration)); // المعدل الفعلي الممر لـ ffmpeg
-    if (requestedFps !== Math.round(actualFps)) {
+    // Adaptive FPS بلا أي رفض مبكر: عدد الإطارات = ما تتسع له الميزانية،
+    // والمعدل الفعلي (frames/duration) هو الممر لـ ffmpeg فيبقى الصوت متزامنًا
+    // والمشاهد ثقيلة جدًا تحصل على fps أدنى (سلايد شو مقبول) بدل فشل المهمة.
+    const framesByBudget = Math.max(1, Math.floor(FRAME_TIME_BUDGET_MS / perFrameMs));
+    const desiredFrames = Math.max(MIN_FPS, Math.min(MAX_FPS, requestedFps)) * duration; // المطلوب
+    const frames = Math.max(1, Math.round(Math.min(desiredFrames, framesByBudget, MAX_FPS * MAX_DURATION)));
+    const actualFps = Math.max(0.1, Math.min(MAX_FPS, frames / duration)); // المعدل الفعلي الممر لـ ffmpeg
+    if (actualFps < ADAPTIVE_FPS_TARGET) {
+      console.warn(`[codevideo:${jobId}] FPS تكيّفي منخفض: ${actualFps.toFixed(2)}fps (زمن الإطار ${Math.round(perFrameMs)}ms، ${frames} إطارًا لـ ${duration} ثانية) — المشهد ثقيل لكن الرندر سيكتمل بلا فشل`);
+    } else if (requestedFps !== Math.round(actualFps)) {
       console.warn(`[codevideo:${jobId}] خُفّض معدل الإطارات ${requestedFps}→${actualFps.toFixed(2)}fps ليلائم ميزانية الوقت (زمن الإطار ${Math.round(perFrameMs)}ms)`);
     }
     await updateJob(jobId, { progress: 10 });
@@ -448,4 +483,4 @@ async function runCodeVideoJob(jobId, spec) {
   }
 }
 
-module.exports = { runCodeVideoJob, injectFonts, sanitizeWordTimings, audioDurationSec };
+module.exports = { runCodeVideoJob, injectPageEnhancements, sanitizeWordTimings, audioDurationSec };

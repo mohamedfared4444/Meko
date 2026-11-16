@@ -43,17 +43,19 @@ const TITLE_MAX = 200;
 const DURATION_MIN = 3;
 const DURATION_MAX = 60;
 const DEFAULT_DURATION = 15;
-const DEFAULT_FPS = 24;
+const DEFAULT_FPS = 20;
 
-/** مقاس الفيديو لكل اتجاه — 720p للسرعة والجودة معًا (حتى لا يتجاوز الرندر مهلة الدالة) */
+/** مقاس الفيديو السريع لكل اتجاه — يقلل بكسلات Chromium Software Rasterizer
+ *  ~45% مقارنة بـ 720p فيسرّع الالتقاط ويضمن اكتمال الرندر داخل مهلة الدالة،
+ *  ويمكن رفع الأبعاد اختياريًا لاحقًا إن لزم (خدمة الدمج تقبل حتى 1280) */
 export function dimensionsFor(aspectRatio: "9:16" | "16:9" | "1:1"): { width: number; height: number } {
   switch (aspectRatio) {
     case "16:9":
-      return { width: 1280, height: 720 };
+      return { width: 960, height: 540 };
     case "1:1":
-      return { width: 960, height: 960 };
+      return { width: 640, height: 640 };
     default:
-      return { width: 720, height: 1280 };
+      return { width: 540, height: 960 };
   }
 }
 

@@ -6,6 +6,10 @@
  * window.renderAtTime(t, duration, wordTimings) → إطارات عبر Chromium
  * → MP4 عبر ffmpeg. الصوت اختياري (audio_url) ويحدد مدة الفيديو عند وجوده،
  * وتوقيتات الكلمات (word_timings) تُمرر للدالة في كل إطار لمزامنة النطق.
+ *
+ * الأبعاد: aspect_ratio اختياري (9:16 افتراضيًا) بأبعاد سريعة افتراضية
+ * (540×960 / 960×540 / 640×640) تقلل حمل الـ Software Rasterizer ~45%،
+ * ويمكن رفعها اختياريًا عبر width/height الصريحة.
  */
 
 const crypto = require("crypto");
@@ -48,6 +52,9 @@ async function handleCodeVideo(req, res) {
   if (body.fps !== undefined && (!Number.isFinite(Number(body.fps)) || Number(body.fps) < 8 || Number(body.fps) > 30)) {
     return sendError(res, 400, "fps يجب أن يكون بين 8 و30");
   }
+  if (body.aspect_ratio !== undefined && !["9:16", "16:9", "1:1"].includes(String(body.aspect_ratio))) {
+    return sendError(res, 400, 'aspect_ratio يقبل "9:16" أو "16:9" أو "1:1" فقط');
+  }
   for (const dim of ["width", "height"]) {
     if (body[dim] !== undefined && (!Number.isInteger(Number(body[dim])) || Number(body[dim]) < 240 || Number(body[dim]) > 1280 || Number(body[dim]) % 2 !== 0)) {
       return sendError(res, 400, `${dim} يجب أن يكون عددًا زوجيًا بين 240 و1280`);
@@ -70,6 +77,7 @@ async function handleCodeVideo(req, res) {
       audio_url: body.audio_url || null,
       duration_seconds: body.duration_seconds || null,
       fps: body.fps || null,
+      aspect_ratio: body.aspect_ratio || null,
       width: body.width || null,
       height: body.height || null,
       word_timings_count: Array.isArray(body.word_timings) ? body.word_timings.length : 0,
@@ -82,6 +90,7 @@ async function handleCodeVideo(req, res) {
     audio_url: body.audio_url || null,
     duration_seconds: body.duration_seconds || null,
     fps: body.fps || null,
+    aspect_ratio: body.aspect_ratio || null,
     width: body.width || null,
     height: body.height || null,
     word_timings: Array.isArray(body.word_timings) ? body.word_timings : null,

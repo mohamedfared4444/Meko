@@ -79,3 +79,9 @@ skills/
 tool-results/
 server.log
 *.tsbuildinfo
+
+# مكانيّات الجلسات
+skills/
+tool-results/
+server.log
+*.tsbuildinfo
