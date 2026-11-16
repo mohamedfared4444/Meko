@@ -10,8 +10,11 @@
  *  - بلا صوت؟ مدة قياسية لكل صورة (3.5 ثانية) أو total_duration من الطلب.
  *  - ترجمة متزامنة اختيارية (captions_url: http/https أو data:text base64 لملف SRT):
  *    تُطبع على الفيديو عبر فلتر subtitles/libass بخط Noto Sans Arabic مضمّن في
- *    الخدمة (يدعم العربية والإنجليزية مع تشكيل واتجاه RTL صحيح عبر fribidi)،
- *    ويُهيأ fontconfig بملف conf مؤقت ليجد الخط المضمّن بلا اعتماد على نظام الاستضافة.
+ *    الخدمة عبر «fontsdir» المباشر (لا تعتمد على fontconfig نظام الاستضافة إطلاقًا
+ *    — أثبت الفحص الإنتاجي أن fontconfig في lambda يفشل في إيجاد الخط فيقع
+ *    الرندر على خط ساقط بلا جداول تشكيل فتنفصل الحروف العربية).
+ *    + تشكيل احتياطي لحروف العربية (lib/arabic-text.js) يحوّلها لأشكال العرض
+ *    قبل تسليم الملف لـ FFmpeg فتظهر متصلة حتى على خط ساقط.
  *  - دقة الهدف من aspect_ratio: 9:16 → 720×1280 (Shorts/Reels)،
  *    16:9 → 1280×720 (يوتيوب)؛ 1080p اختياري (1080×1920 / 1920×1080).
  *  - ترميز libx264 CRF 21 + preset veryfast (قابل للتجاوز بـ VIDEOCUT_PRESET)
@@ -26,6 +29,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 const { LIMITS, updateJob, saveBlobRows } = require("./db");
 const { ensureExecutable, ffmpegBin, ffprobeBin } = require("./merge");
+const { shapeSrt, preshapeEnabled } = require("./arabic-text");
 
 const MAX_IMAGES = 20;
 const TRANSITION_DEFAULT = 0.6;
@@ -136,13 +140,24 @@ function escapeFilterPath(p) {
 
 /**
  * فلتر طباعة الترجمة على الفيديو — libass مع force_style:
- *  - خط Noto Sans Arabic مضمّن (عربي + لاتيني) وتشكيل RTL عبر fribidi في libass.
+ *  - fontsdir يشير لمجلد الخط المضمّن — libass يحمّله مباشرة (إصلاح الجذر:
+ *    فشل fontconfig في بيئة lambda كان يُسقط الرندر على خط بلا تشكيل).
+ *  - خط Noto Sans Arabic مضمّن (عربي + لاتيني) وfribidi في libass يتكفل
+ *    باتجاه RTL للكلمات (مثبت إنتاجيًا أنه يعمل).
  *  - نص أبيض بحد خارجي أسود واضح + ظل خفيف نصف شفاف — مقروء على أي خلفية.
  *  - الأحجام بوحدات PlayResY=288 (القالب الافتراضي لتحويل SRT) — Fontsize 15
- *    ≈ 5% من ارتفاع الإطار أي إطار كان، وMarginV 18 ≈ هامش سفلي 6%.
+ *    ≈ 5% من ارتفاع الإطار أي إطار كان.
+ *  - MarginV: للفيديو الطولي 9:16 نريد ≈90 بكسلًا حقيقيًا من أسفل الإطار كي
+ *    لا تغطي الترجمة شريط التشغيل (Shorts/Reels) — التحويل لوحدة القالب:
+ *    90×288÷الارتفاع (720×1280 → 20 ≈ 88.9 بكسل حقيقي، 1080×1920 → 14 ≈ 93).
+ *    الأفقي يبقى 18 كما كان (≈45 بكسل عند 720p).
  *  - Alignment=2 (أسفل الوسط) مناسب للعمودي والأفقي معًا.
  */
-function buildSubtitleFilter(srtPath) {
+function buildSubtitleFilter(srtPath, opts = {}) {
+  const fontDir = opts.fontDir || null;
+  const isPortrait = opts.isPortrait === true;
+  const height = Number(opts.height) || 0;
+  const marginV = isPortrait && height > 0 ? Math.max(10, Math.round((90 * 288) / height)) : 18;
   const style = [
     `FontName=${CAPTIONS_FONT_FAMILY}`,
     "Fontsize=15",
@@ -156,11 +171,16 @@ function buildSubtitleFilter(srtPath) {
     "Alignment=2",
     "MarginL=16",
     "MarginR=16",
-    "MarginV=18",
-    "Spacing=0.3",
+    `MarginV=${marginV}`,
+    // Spacing=0 إلزامي: أي تباعد أحرف يفصل الحروف العربية المتصلة عن بعضها
+    // (libass يوزع المسافة بين كل glyph فيكسر وصل الكتابة العربية المتصلة)
+    "Spacing=0",
     "Encoding=1",
   ].join(",");
-  return `subtitles=filename='${escapeFilterPath(srtPath)}':force_style='${style}'`;
+  const parts = [`filename='${escapeFilterPath(srtPath)}'`];
+  if (fontDir) parts.push(`fontsdir='${escapeFilterPath(fontDir)}'`);
+  parts.push(`force_style='${style}'`);
+  return `subtitles=${parts.join(":")}`;
 }
 
 /** ملف fontconfig مؤقت يجعل الخط المضمّن مرئيًا لـ libass بلا اعتماد على النظام */
@@ -194,12 +214,14 @@ function writeFontConfig(tmpDir) {
 </fontconfig>
 `;
   fs.writeFileSync(confPath, conf);
-  return { confPath, hasBundledFont: !!fontDir };
+  return { confPath, hasBundledFont: !!fontDir, fontDir };
 }
 
 /**
  * تجهيز ملف الترجمة: تنزيل من رابط أو فكّ data URL → كتابة إلى tmpDir
- * + تحقق أن المحتوى يشبه SRT. أي فشل = ترجمة بلا طباعة مع سبب واضح
+ * + تحقق أن المحتوى يشبه SRT + تشكيل احتياطي لحروف العربية (أشكال العرض)
+ * كي تظهر متصلة حتى لو وقع libass على خط بلا جداول تشكيل (انظر arabic-text.js).
+ * أي فشل = ترجمة بلا طباعة مع سبب واضح
  * (لا يُفشل الفيديو كله بسبب ملف ترجمة سيئ).
  */
 async function prepareCaptions(spec, tmpDir) {
@@ -218,11 +240,22 @@ async function prepareCaptions(spec, tmpDir) {
     } else {
       await downloadTo(raw, dest, CAPTIONS_MAX_BYTES);
     }
-    const text = await fs.promises.readFile(dest, "utf8");
+    let text = await fs.promises.readFile(dest, "utf8");
     if (!text.includes("-->")) {
       throw new Error("المحتوى لا يشبه ملف ترجمة SRT (لا يحتوي توقيتات -->)");
     }
-    return { path: dest, warning: null };
+    // التشكيل الاحتياطي: أشكال العرض العربية قبل التسليم لـ libass
+    // (يمكن إيقافه بـ CAPTIONS_ARABIC_PRESHAPE=0)
+    let preshaped = false;
+    if (preshapeEnabled()) {
+      const shaped = shapeSrt(text);
+      if (shaped !== text) {
+        await fs.promises.writeFile(dest, shaped, "utf8");
+        text = shaped;
+        preshaped = true;
+      }
+    }
+    return { path: dest, warning: null, preshaped };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     await fs.promises.rm(dest, { force: true }).catch(() => {});
@@ -268,6 +301,10 @@ async function runVideocutJob(jobId, spec) {
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `vcut-${jobId}-`));
   const outputPath = path.join(tmpDir, "output.mp4");
+  // الخط المضمّن + fontconfig يُجهزان مبكرًا — مجلد الخط يُمرر أيضًا لفلتر
+  // subtitles عبر fontsdir (الإصلاح الجذري: libass يجد الخط مباشرة بلا اعتماد
+  // على fontconfig الاستضافة الذي أثبت الفحص الإنتاجي أنه يفشل في lambda)
+  const fontCfg = writeFontConfig(tmpDir);
   try {
     // 0) تجهيز ملف الترجمة إن وُجد (فشله لا يوقف الفيديو — يُكمل بلا ترجمة فقط)
     const captions = await prepareCaptions(spec, tmpDir);
@@ -371,10 +408,10 @@ async function runVideocutJob(jobId, spec) {
       }
       filters.push(`[${prev}]format=yuv420p[vout]`);
     }
-    // طباعة الترجمة المتزامنة على الفيديو المدموج (libass + الخط المضمّن)
+    // طباعة الترجمة المتزامنة على الفيديو المدموج (libass + الخط المضمّن عبر fontsdir)
     let videoLabel = "vout";
     if (captions.path) {
-      filters.push(`[vout]${buildSubtitleFilter(captions.path)}[vsub]`);
+      filters.push(`[vout]${buildSubtitleFilter(captions.path, { fontDir: fontCfg.fontDir, isPortrait, height: h })}[vsub]`);
       videoLabel = "vsub";
     }
     // الصوت
@@ -395,8 +432,7 @@ async function runVideocutJob(jobId, spec) {
     await updateJob(jobId, { progress: 30 });
 
     // 4) الترميز مع قراءة التقدم (30–92%)
-    // fontconfig مخصص يجعل الخط المضمّن للترجمة مرئيًا لـ libass
-    const fontCfg = writeFontConfig(tmpDir);
+    // fontconfig مخصص يجعل الخط المضمّن مرئيًا لـ libass (طبقة ثانية بجانب fontsdir)
     const childEnv = { ...process.env, FONTCONFIG_FILE: fontCfg.confPath };
     await new Promise((resolve, reject) => {
       const child = spawn(ffmpeg, args, { stdio: ["ignore", "pipe", "pipe"], env: childEnv });

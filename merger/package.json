@@ -8,6 +8,7 @@
     "dev": "node server.js",
     "start": "node server.js",
     "test:unit": "node scripts/test-unit.js",
+    "test:arabic": "node scripts/test-arabic-text.js",
     "test:http": "node scripts/test-http.js"
   },
   "dependencies": {
