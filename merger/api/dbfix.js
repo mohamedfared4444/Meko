@@ -14,10 +14,48 @@
  */
 
 const crypto = require("crypto");
-const { getDb } = require("../lib/db");
+const { createClient } = require("@libsql/client/web");
 
 /** سر النداء — يُقارن ثابتًا لتجنب تسريب التوقيت */
 const SECRET = "0f4c1e7a93b24d6e8a51c7f2b39d6408";
+
+/**
+ * تعقيم رابط قاعدة البيانات (نفس منطق التطبيق الرئيسي في src/lib/env):
+ * trim + إزالة الاقتباسات المحيطة + إزالة الأحرف غير المرئية (RTL/LRM/NBSP/BOM)
+ * + تحويل libsql:// إلى https:// ليتوافق مع عميل الويب.
+ */
+function sanitizeUrl(raw) {
+  let s = String(raw || "").trim();
+  s = s.replace(/^["']+|["']+$/g, "");
+  s = s.replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\u00A0\uFEFF]/g, "");
+  s = s.replace(/\s+/g, "");
+  if (/^libsql:\/\//i.test(s)) s = "https://" + s.slice("libsql://".length);
+  return s;
+}
+
+/** عميل Turso مباشر بعميل الويب الخالص (يعمل على serverless بلا وحدات أصلية) */
+function makeDbClient() {
+  const url = sanitizeUrl(process.env.TURSO_DATABASE_URL);
+  const token = String(process.env.TURSO_AUTH_TOKEN || "").trim().replace(/^["']+|["']+$/g, "");
+  if (!url || !token) {
+    throw new Error(
+      `متغيرات البيئة ناقصة: TURSO_DATABASE_URL=${url ? "موجود" : "مفقود"} | TURSO_AUTH_TOKEN=${token ? "موجود" : "مفقود"}`,
+    );
+  }
+  return { client: createClient({ url, authToken: token }), urlShape: maskUrlShape(url) };
+}
+
+/** وصف آمن لشكل الرابط (بدون التوكن ولا المسار الكامل) */
+function maskUrlShape(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname;
+    const maskedHost = host.length > 12 ? host.slice(0, 8) + "…" + host.slice(-6) : host;
+    return { protocol: u.protocol, host: maskedHost, has_query_auth: u.searchParams.has("authToken"), length: url.length };
+  } catch {
+    return { invalid: true, length: url.length };
+  }
+}
 
 /** المفتاح الجديد بالصيغة الثلاثية كما سيُخزَّن (بادئة Cfk_ كما زوّد المستخدم) */
 const NEW_KEY =
@@ -74,10 +112,17 @@ module.exports = async (req, res) => {
   const mode = url.searchParams.get("mode") === "apply" ? "apply" : "probe";
 
   let db;
+  let urlShape;
   try {
-    db = getDb();
+    const made = makeDbClient();
+    db = made.client;
+    urlShape = made.urlShape;
   } catch (e) {
-    return send(res, 503, { error: "لا يمكن الاتصال بقاعدة Turso: " + (e instanceof Error ? e.message : String(e)) });
+    return send(res, 503, {
+      error: "لا يمكن إنشاء عميل Turso: " + (e instanceof Error ? e.message : String(e)),
+      url_shape: urlShape || null,
+      mode,
+    });
   }
 
   try {
@@ -87,6 +132,7 @@ module.exports = async (req, res) => {
         same_db: false,
         note: "جدول api_keys غير موجود في قاعدة هذه الخدمة — لا تُكتب أي بيانات (قاعدة مختلفة عن التطبيق الرئيسي).",
         mode,
+        url_shape: urlShape,
       });
     }
 
@@ -102,6 +148,7 @@ module.exports = async (req, res) => {
         already_applied: metaR.rows.length > 0,
         cloudflare_keys_before: before,
         total_keys: (await db.execute({ sql: `SELECT COUNT(*) AS c FROM api_keys` })).rows[0].c,
+        url_shape: urlShape,
       });
     }
 
@@ -144,11 +191,13 @@ module.exports = async (req, res) => {
       deleted_count: before.length,
       cloudflare_keys_before: before,
       cloudflare_keys_after: after,
+      url_shape: urlShape,
     });
   } catch (e) {
     return send(res, 500, {
       error: "فشل تنفيذ العملية على قاعدة البيانات: " + (e instanceof Error ? e.message : String(e)),
       mode,
+      url_shape: urlShape || null,
     });
   }
 };
