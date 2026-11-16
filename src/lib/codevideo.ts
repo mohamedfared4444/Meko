@@ -201,7 +201,8 @@ async function ensureRender(taskId: string, params: CodeVideoParams, deadline: n
     fps: params.fps,
     width: params.width,
     height: params.height,
-    word_timings: params.wordTimings ?? null,
+    // التوقيتات تُرسل فقط عند وجودها — لا null (خدمة الدمج ترفض قيمًا غير مصفوفة)
+    ...(params.wordTimings ? { word_timings: params.wordTimings } : {}),
   });
   params.videoUrl = result.videoUrl;
   params.videoDownloadUrl = result.downloadUrl;

@@ -53,7 +53,8 @@ async function handleCodeVideo(req, res) {
       return sendError(res, 400, `${dim} يجب أن يكون عددًا زوجيًا بين 240 و1280`);
     }
   }
-  if (body.word_timings !== undefined && !Array.isArray(body.word_timings)) {
+  // يقبل غياب الحقل أو null (فيديو صامد بلا تزامن كلمات) — ويرفض غير المصفوفة
+  if (body.word_timings != null && !Array.isArray(body.word_timings)) {
     return sendError(res, 400, 'word_timings يجب أن تكون مصفوفة من {start,end,text} بالثواني');
   }
 
