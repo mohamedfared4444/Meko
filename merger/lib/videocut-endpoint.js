@@ -1,11 +1,18 @@
 /**
  * نقطة الدخول API — POST /api/videocut (استُخرجت من المحرك لتظل تحت
  * vercel.json (functions على مسار api — حد 60 ثانية).
+ *
+ * الترجمة المتزامنة: مرّر captions_url (رابط http/https لملف SRT أو
+ * data:text/…;base64) مع captions: true (الافتراضي) ليطبع FFmpeg الترجمة
+ * على الفيديو النهائي بخط عربي/إنجليزي مضمّن في الخدمة.
  */
 
 const crypto = require("crypto");
 const { insertJob } = require("./db");
 const { runVideocutJob } = require("./videocut");
+
+/** أقصى حجم مقبول لملف ترجمة (سطر أو data URL) */
+const CAPTIONS_MAX_CHARS = 3_000_000;
 
 async function handleVideocut(req, res) {
   if (req.method !== "POST") {
@@ -30,19 +37,31 @@ async function handleVideocut(req, res) {
     return sendError(res, 400, "رابط الصوت غير صالح — يجب أن يكون http/https أو data:audio/…");
   }
 
+  // ملف الترجمة: http/https أو data:text/… أو data:application/… (base64)
+  const captionsUrl = typeof body.captions_url === "string" ? body.captions_url.trim() : "";
+  if (captionsUrl && !/^(https?:\/\/|data:text\/|data:application\/)/i.test(captionsUrl)) {
+    return sendError(res, 400, "ملف الترجمة غير صالح — يجب أن يكون http/https أو data:text/… أو data:application/… بصيغة base64");
+  }
+  if (captionsUrl.length > CAPTIONS_MAX_CHARS) {
+    return sendError(res, 413, "ملف الترجمة كبير جدًا (الحد 3MB)");
+  }
+  const captions = body.captions === false ? false : true;
+
   const jobId = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 24 * 3600 * 1000).toISOString().replace("T", " ").slice(0, 19);
   // sources_json كمصفوفة بعنصر واحد — يبقى GET /api/jobs/{id} متسقًا ولا يفشل
   await insertJob({
     id: jobId,
     status: "queued",
-    sources_json: JSON.stringify([{ kind: "videocut", images, audio_url: body.audio_url || null, aspect_ratio: body.aspect_ratio || "9:16", transition: body.transition || null, resolution: body.resolution || "720p", total_duration: body.total_duration || null }]),
+    sources_json: JSON.stringify([{ kind: "videocut", images, audio_url: body.audio_url || null, captions_url: captions ? captionsUrl || null : null, captions, aspect_ratio: body.aspect_ratio || "9:16", transition: body.transition || null, resolution: body.resolution || "720p", total_duration: body.total_duration || null }]),
     expires_at: expiresAt,
   });
 
   const result = await runVideocutJob(jobId, {
     images,
     audio_url: body.audio_url || null,
+    captions_url: captions ? captionsUrl || null : null,
+    captions,
     aspect_ratio: body.aspect_ratio || "9:16",
     transition: body.transition,
     resolution: body.resolution,

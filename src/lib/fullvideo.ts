@@ -11,17 +11,24 @@ import { getTask, getKeyPool, insertTask, recordKeyUsage, updateTask } from "./t
 
 /**
  * خط إنتاج الفيديو الأوتوماتيكي الشامل — create_full_video:
- *  1) Gemini (gemini-2.5-flash، JSON منظّم) يكتب نص التعليق + يقسّم المشاهد
- *     + يكتب برومبت صورة موحّد الشخصية والستايل لكل مشهد.
+ *  1) السكربت: إما سكربت جاهز من العميل (custom_script) يُستخدم حرفيًا للصوت
+ *     مع برومبتات مشاهد جاهزة (scenes) أو تُولَّد من جُمَله بـ Gemini — أو
+ *     Gemini (gemini-2.5-flash، JSON منظّم) يكتب نص التعليق + يقسّم المشاهد
+ *     + يكتب برومبت صورة موحّد الشخصية والستايل لكل مشهد، بسقف كلمات دقيق
+ *     من المدة المطلوبة (ar ‎2.1 كلمة/ث، en ‎2.5 كلمة/ث) وبتعليمات صارمة
+ *     ضد التكرار والجمل الإنشائية العامة.
  *     (بلا مفاتيح Gemini أو عند فشلها: سكربت احتياطي محلي يبني المشاهد من
  *     الموضوع — الخط لا يتوقف أبدًا في هذه الخطوة.)
- *  2) Edge-TTS يولّد الصوت الكامل (MP3) وتُحسب مدته الدقيقة بالثواني.
+ *  2) Edge-TTS يولّد الصوت الكامل (MP3) وتُحسب مدته الدقيقة بالثواني،
+ *     مع توقيتات كل كلمة (WordBoundary/SentenceBoundary) لبناء ترجمة
+ *     SRT متزامنة مجانًا من نفس النداء.
  *  3) صور المشاهد تُولَّد بالتسلسل عبر مجمع المفاتيح المجاني بالترتيب
  *     (Cloudflare → Hugging Face → Gemini Imagen → Pollinations → kie → CometAPI)
  *     مع تسجيل استخدام المفاتيح وتصنيف الأخطاء — وكل صورة تُخزَّن فور اكتمالها
  *     (قابل للاستكمال بعد أي انقطاع).
- *  4) الصور + الصوت يُرسلان إلى خدمة meko-manger (/api/videocut) لدمجهما عبر
- *     FFmpeg بحركة كاميرا Ken Burns وانتقالات Crossfade ومدة مطابقة للصوت —
+ *  4) الصور + الصوت + ملف الترجمة يُرسلون إلى خدمة meko-manger (/api/videocut)
+ *     لدمجهما عبر FFmpeg بحركة كاميرا Ken Burns وانتقالات Crossfade ومدة مطابقة
+ *     للصوت وطباعة الترجمة على الفيديو (captions: true افتراضيًا) —
  *     فيديو MP4 نهائي برابط مباشر.
  *
  * آلة حالات قابلة للاستكمال: كل خطوة تحفظ تقدمها في params_json للمهمة نفسها
@@ -41,8 +48,9 @@ const MIN_DURATION = 10;
 const MAX_DURATION = 180;
 const SCENE_MIN = 3;
 const SCENE_MAX = 12;
-/** ثانية تقريبًا لكل كلمة في النطق الطبيعي (en ~2.5 كلمة/ث، ar أبطأ قليلًا) */
-const WORDS_PER_SEC = { en: 2.4, ar: 1.8 } as const;
+/** ثانية تقريبًا لكل كلمة في النطق الطبيعي — السقف الدقيق الذي حدده المستخدم:
+ *  العربية ‎2.1 كلمة/ثانية والإنجليزية ‎2.5 كلمة/ثانية */
+const WORDS_PER_SEC = { en: 2.5, ar: 2.1 } as const;
 
 export interface FullVideoScene {
   narration: string;
@@ -59,6 +67,18 @@ export interface FullVideoParams {
   targetDuration: number;
   /** آلة الحالات: script → audio → images → merge */
   stage: "script" | "audio" | "images" | "merge";
+  /** السكربت جاهز ولا حاجة لإعادة الدخول في خطوة السكربت */
+  scriptReady?: boolean;
+  /** هل السكربت قدمه العميل جاهزًا (custom_script) بدل تأليفه بـ Gemini؟ */
+  customScript?: boolean;
+  /** تفعيل الترجمة المتزامنة المحروقة (الافتراضي true) */
+  captions?: boolean;
+  /** رابط ملف الترجمة SRT (http أو data:base64) الناتج من توقيتات Edge-TTS */
+  captionsUrl?: string;
+  /** هل طُبعت الترجمة فعلاً على الفيديو النهائي؟ (من رد نقطة الدمج) */
+  captionsBurned?: boolean;
+  /** مشاهد بلا تعليق صوتي (scenes فقط) — فيديو صام بمدة الهدف */
+  audioSkipped?: boolean;
   title?: string;
   script?: string;
   scenes: FullVideoScene[];
@@ -91,20 +111,90 @@ function saveParams(
 }
 
 // ---------------------------------------------------------------------------
-// 1) السكربت — Gemini أولًا ثم سكربت احتياطي محلي
+// 1) السكربت — Gemini أولًا ثم سكربت احتياطي محلي (أو سكربت العميل الجاهز)
 
 function sceneCountFor(durationSec: number): number {
   return Math.max(SCENE_MIN, Math.min(SCENE_MAX, Math.round(durationSec / 6)));
 }
 
+/** سقف الكلمات الدقيق للسكربت من المدة المستهدفة (ar ‎2.1 / en ‎2.5 كلمة في الثانية) */
+function wordCapFor(durationSec: number, language: "en" | "ar"): number {
+  return Math.max(20, Math.round(durationSec * WORDS_PER_SEC[language]));
+}
+
+/** تقسيم نص إلى جمل (عربي/إنجليزي) مع إبقاء علامات الترقيم ملتصقة */
+export function splitSentences(text: string): string[] {
+  const parts = text
+    .split(/(?<=[.!?؟…؛])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 1);
+  // دمج الشذرات البكرية جدًا في السابقة (أقل من 3 أحرف بعد إزالة الترقيم)
+  const merged: string[] = [];
+  for (const p of parts) {
+    const prev = merged[merged.length - 1];
+    if (prev && p.replace(/[.!?؟…؛،:]/g, "").trim().length < 3) merged[merged.length - 1] = `${prev} ${p}`;
+    else merged.push(p);
+  }
+  return merged.length > 0 ? merged : [text.trim()].filter(Boolean);
+}
+
+/** توزيع قائمة عناصر على عدد مجموعات بترتيب متصل (لا خلط بين الجمل) */
+export function groupEvenly<T>(items: T[], groups: number): T[][] {
+  const g = Math.max(1, Math.min(groups, items.length || groups));
+  const base = Math.floor(items.length / g);
+  const rem = items.length % g;
+  const out: T[][] = [];
+  let cursor = 0;
+  for (let i = 0; i < g; i++) {
+    const size = base + (i < rem ? 1 : 0);
+    out.push(items.slice(cursor, cursor + size));
+    cursor += size;
+  }
+  return out;
+}
+
+/**
+ * تطبيق السكربت الجاهز من العميل على المشاهد:
+ *  - مشاهد نائبة فارغة (الوضع B): المشاهد تُقاس على عدد الجمل
+ *    (سقف SCENE_MAX) وكل مشهد يأخذ جملًا متصلة بالترتيب.
+ *  - مشاهد ببرومبتات جاهزة (الوضع A): الجمل توزَّع على المشاهد المعطاة
+ *    بالترتيب نفسه وبرومبتات الصور تبقى كما هي دون أي مساس.
+ */
+export function applyCustomScriptToScenes(
+  script: string,
+  scenes: FullVideoScene[],
+): FullVideoScene[] {
+  const sentences = splitSentences(script);
+  const allEmpty = scenes.every((s) => !s.image_prompt && !s.narration);
+  if (allEmpty) {
+    const n = Math.min(SCENE_MAX, Math.max(1, sentences.length));
+    return groupEvenly(sentences, n).map((g) => ({ narration: g.join(" "), image_prompt: "" }));
+  }
+  const groups = groupEvenly(sentences, Math.max(1, scenes.length));
+  return scenes.map((s, i) => ({ ...s, narration: (groups[i] ?? []).join(" ") }));
+}
+
 function buildScriptPrompt(params: FullVideoParams): string {
   const n = params.scenes.length;
-  const wordsPerScene = Math.max(8, Math.round((params.targetDuration * WORDS_PER_SEC[params.language]) / n));
+  const wordCap = wordCapFor(params.targetDuration, params.language);
+  const wordsPerScene = Math.max(8, Math.round(wordCap / n));
   const langText =
     params.language === "ar"
-      ? "اكتب التعليق الصوتي بالعربية الفصحى المبسطة الجذابة."
-      : "Write the voiceover narration in English, conversational and engaging.";
+      ? `اكتب التعليق الصوتي بالعربية الفصحى المبسطة الجذابة. السقف الصارم: ${wordCap} كلمة كحد أقصى للمسكربت كاملًا (نحو ${wordsPerScene} كلمة لكل مشهد) — عدّ الكلمات قبل أن تكتب.`
+      : `Write the voiceover narration in English, conversational and engaging. HARD CAP: the whole script must be AT MOST ${wordCap} words total (about ${wordsPerScene} words per scene) — count words before you output.`;
   const styleText = params.style || (params.language === "ar" ? "سينمائي" : "cinematic");
+  const antiFiller =
+    params.language === "ar"
+      ? [
+          `- لا تكرر عنوان الموضوع حرفيًا في أكثر من جملة واحدة، ولا تبدأ بعبارات إنشائية عامة مثل «في هذا الفيديو» أو «دعنا نستكشف» أو «قصة رائعة عن».`,
+          `- كل جملة تحمل معلومة حقيقية مركزة (أرقام، أسماء، أسباب، نتائج، تفاصيل ملموسة) أو تدفع سردًا قصصيًا مشوقًا — لا حشو ولا مقدمات فارغة.`,
+          `- برومبت الصورة في كل مشهد يصور محتوى الجملة المقابلة له تحديدًا (الأشياء والأماكن والأفعال المذكورة فيها) وليس الموضوع عامة.`,
+        ].join("\n")
+      : [
+          `- Never repeat the topic title verbatim more than once, and never open with generic filler like "In this video", "Let's explore", "Today we'll talk about" or "The amazing story of".`,
+          `- Every sentence must carry concrete, focused information (numbers, names, causes, consequences, sensory details) or advance an engaging story — zero filler, zero vague introductions.`,
+          `- Each scene's image_prompt must depict the content of ITS corresponding sentence specifically (the objects, places and actions it mentions), not the topic in general.`,
+        ].join("\n");
   return `You are a professional short-video scriptwriter for a ${params.targetDuration}-second ${params.aspectRatio} vertical/horizontal video.
 
 Topic: ${params.topic}
@@ -123,7 +213,30 @@ Write a JSON object with exactly this shape:
 Rules:
 - Exactly ${n} scenes in the "scenes" array.
 - Narrations together read as one flowing voiceover of about ${params.targetDuration} seconds. No headings, no bullet points, no stage directions — spoken words only.
+${antiFiller}
 - EACH image_prompt must: describe ONE consistent main character with an IDENTICAL appearance description repeated word-for-word in every prompt (age, clothing, hair, distinguishing features), keep the SAME art style and color palette across all prompts ("${styleText}" style), be a complete standalone text-to-image prompt with composition, lighting and mood details, and contain NO text/letters/captions inside the image.
+- Output JSON only — no markdown fences, no commentary.`;
+}
+
+/** برومبت توليد برومبتات الصور فقط لسكربت جاهز من العميل — Gemini لا يُعيد كتابة النص */
+function buildImagePromptsPrompt(params: FullVideoParams): string {
+  const n = params.scenes.length;
+  const styleText = params.style || (params.language === "ar" ? "سينمائي" : "cinematic");
+  const sceneList = params.scenes.map((s, i) => `${i + 1}. ${s.narration || params.topic}`).join("\n");
+  return `You are a text-to-image prompt engineer. A finished voiceover already exists — DO NOT rewrite, translate or extend it. Your only job: for each numbered scene below, write ONE image prompt depicting exactly what that scene's narration describes (its objects, places, actions, moment in the story).
+
+Topic (context only): ${params.topic}
+Visual style: ${styleText}
+
+Scenes (narration is FIXED — it is listed only for you to illustrate):
+${sceneList}
+
+Return a JSON object with exactly this shape:
+{ "image_prompts": ["prompt for scene 1", "prompt for scene 2", ...] }
+
+Rules:
+- Exactly ${n} prompts, in the same order as the scenes.
+- Each prompt: ONE consistent main character with an IDENTICAL appearance description repeated word-for-word (age, clothing, hair, distinguishing features), the SAME "${styleText}" art style and color palette, composition + lighting + mood details, and NO text/letters/captions inside the image.
 - Output JSON only — no markdown fences, no commentary.`;
 }
 
@@ -161,6 +274,20 @@ function localFallbackScript(params: FullVideoParams): void {
   }
 }
 
+/** برومبتات صور احتياطية محلية لسكربت جاهز من العميل — تعكس محتوى كل جملة */
+function localScenePrompts(params: FullVideoParams): void {
+  const styleText = params.style || (params.language === "ar" ? "سينمائي" : "cinematic");
+  const character =
+    params.language === "ar"
+      ? "بطل رئيسي واحد بمظهر ثابت: شخص بالغ أنيق بسترة كحلية وشعر أسود قصير"
+      : "one consistent main character: an elegant adult wearing a navy jacket with short dark hair";
+  params.scenes.forEach((s, i) => {
+    const shot = ["cinematic establishing wide shot", "medium close-up shot", "dynamic panning shot", "dramatic closing wide shot"][i % 4];
+    const about = (s.narration || params.topic).slice(0, 140);
+    s.image_prompt = `${shot} illustrating: ${about}. ${styleText} style, consistent protagonist — ${character}, rich lighting, high detail, no text in image`;
+  });
+}
+
 /** اختيار مفتاح gemini نشط مع تدوير + تسجيل استخدام */
 async function withGeminiKey<T>(fn: (key: string) => Promise<T>): Promise<T | null> {
   const keys: ApiKeyRow[] = await getKeyPool(["gemini"]).catch(() => []);
@@ -182,8 +309,51 @@ async function withGeminiKey<T>(fn: (key: string) => Promise<T>): Promise<T | nu
   return null;
 }
 
+/**
+ * خطوة السكربت — أربعة أوضاع حسب المعطيات:
+ *  A) custom_script + scenes: توزيع جمل السكربت الجاهز على المشاهد المعطاة
+ *     بالترتيب (بلا أي شبكة) — الصوت يُولَّد من النص كما هو حرفيًا.
+ *  B) custom_script فقط: Gemini يكتب برومبتات الصور فقط من جمل السكربت
+ *     (لا يُعيد كتابة النص إطلاقًا) — وفشلها برومبتات محلية احتياطية.
+ *  C) scenes فقط: صور بالبرومبتات المعطاة، بلا تعليق صوتي (فيديو صام).
+ *  D) بلا معطيات: Gemini يكتب السكربت والمشاهد كاملة (السلوك الأصلي).
+ */
 async function ensureScript(taskId: string, params: FullVideoParams, deadline: number): Promise<void> {
-  if (params.script && params.scenes.every((s) => s.image_prompt && s.narration)) return;
+  if (params.scriptReady) return;
+
+  // الوضع C — مشاهد جاهزة ببرومبتاتها بلا سكربت: لا شيء يُكتب هنا
+  if (!params.customScript && params.scenes.length > 0 && params.scenes.every((s) => s.image_prompt)) {
+    params.scriptReady = true;
+    await saveParams(taskId, params, { progress: 10, error_message: null });
+    return;
+  }
+
+  // الوضعان A و B — سكربت جاهز من العميل (custom_script)
+  if (params.customScript && params.script) {
+    params.scenes = applyCustomScriptToScenes(params.script, params.scenes);
+    if (!params.title) params.title = params.topic.slice(0, 60);
+    // برومبتات الصور ناقصة (الوضع B) → Gemini يكتبها من الجمل فقط
+    if (params.scenes.some((s) => !s.image_prompt)) {
+      const viaGemini = await withGeminiKey((key) =>
+        geminiGenerateJson(key, buildImagePromptsPrompt(params), { timeoutMs: Math.max(8_000, Math.min(20_000, deadline - Date.now())), temperature: 0.7, maxOutputTokens: 4096 }),
+      );
+      const prompts = Array.isArray(viaGemini?.image_prompts)
+        ? (viaGemini!.image_prompts as unknown[]).filter((p): p is string => typeof p === "string" && p.trim().length > 0)
+        : [];
+      if (prompts.length === params.scenes.length) {
+        params.scenes.forEach((s, i) => {
+          s.image_prompt = prompts[i].trim();
+        });
+      } else {
+        localScenePrompts(params);
+      }
+    }
+    params.scriptReady = true;
+    await saveParams(taskId, params, { progress: 10, error_message: null });
+    return;
+  }
+
+  // الوضع D — السلوك الافتراضي: Gemini يكتب السكربت والمشاهد كاملة
   const n = sceneCountFor(params.targetDuration);
   params.scenes = Array.from({ length: n }, () => ({ narration: "", image_prompt: "" }));
 
@@ -200,6 +370,7 @@ async function ensureScript(taskId: string, params: FullVideoParams, deadline: n
   } else {
     localFallbackScript(params);
   }
+  params.scriptReady = true;
   await saveParams(taskId, params, { progress: 10, error_message: null });
 }
 
@@ -208,13 +379,20 @@ async function ensureScript(taskId: string, params: FullVideoParams, deadline: n
 
 async function ensureAudio(taskId: string, params: FullVideoParams, deadline: number): Promise<void> {
   if (params.audioUrl && params.audioDuration && params.audioDuration > 0) return;
-  const narration = params.scenes.map((s) => s.narration).filter(Boolean).join(params.language === "ar" ? " " : " ");
-  if (!narration) throw new Error("لا يوجد نص تعليق صوتي للمهمة");
+  const narration = params.scenes.map((s) => s.narration).filter(Boolean).join(" ");
+  if (!narration) {
+    // مشاهد بلا تعليق صوتي (scenes فقط) — فيديو صام بمدة الهدف، بلا ترجمة
+    params.audioSkipped = true;
+    await saveParams(taskId, params, { progress: 20, error_message: null });
+    return;
+  }
   const budget = Math.max(10_000, Math.min(30_000, deadline - Date.now()));
   const voice = normalizeVoice(params.voice);
-  const out = await generateVoiceover(narration, { voice, remainingMs: () => budget });
+  const wantCaptions = params.captions !== false;
+  const out = await generateVoiceover(narration, { voice, remainingMs: () => budget, captions: wantCaptions });
   params.audioUrl = out.url;
   params.audioDuration = Math.round(out.durationSec * 100) / 100;
+  if (wantCaptions && out.captionsUrl) params.captionsUrl = out.captionsUrl;
   await saveParams(taskId, params, { progress: 20, error_message: null });
 }
 
@@ -283,17 +461,22 @@ async function ensureMerge(taskId: string, params: FullVideoParams, deadline: nu
     return;
   }
   const images = params.scenes.map((s) => s.image_url!).filter(Boolean);
+  const useCaptions = params.captions !== false && !!params.captionsUrl;
   const result = await mergerVideocut({
     images,
     audio_url: params.audioUrl ?? null,
     aspect_ratio: params.aspectRatio,
     resolution: params.aspectRatio === "9:16" ? "720p" : "720p",
+    // بلا صوت: مدة الهدف تحكم الفيديو الصام
+    ...(params.audioUrl ? {} : { total_duration: params.targetDuration }),
+    captions_url: useCaptions ? params.captionsUrl! : null,
   });
   params.videoUrl = result.videoUrl;
   params.videoDownloadUrl = result.downloadUrl;
   params.videoDuration = result.duration;
   params.videoJobId = result.jobId;
   params.stage = "merge";
+  params.captionsBurned = result.captions === true;
   await saveParams(taskId, params, {
     progress: 100,
     status: "completed",
@@ -319,12 +502,15 @@ async function advancePipeline(
 ): Promise<PipelineOutcome> {
   const deadline = Date.now() + budgetMs;
   try {
-    if (!params.script) {
-      await onProgress(3, "كتابة السكربت وتقسيم المشاهد بـ Gemini…");
+    if (!params.scriptReady) {
+      await onProgress(
+        3,
+        params.customScript ? "تجهيز المشاهد من السكربت الجاهز…" : "كتابة السكربت وتقسيم المشاهد بـ Gemini…",
+      );
       await ensureScript(taskId, params, deadline);
     }
-    if (!params.audioUrl) {
-      await onProgress(12, "توليد التعليق الصوتي عبر Edge-TTS…");
+    if (!params.audioUrl && !params.audioSkipped) {
+      await onProgress(12, params.captions !== false ? "توليد التعليق الصوتي عبر Edge-TTS مع توقيتات الترجمة…" : "توليد التعليق الصوتي عبر Edge-TTS…");
       await ensureAudio(taskId, params, deadline);
     }
     const missingImages = params.scenes.filter((s) => !s.image_url).length;
@@ -384,6 +570,12 @@ export function formatFullVideoCompleted(task: TaskRow): string {
     .map((s, i) => `${i + 1}. ${s.image_url ? `[صورة](${s.image_url})` : "(بلا صورة)"} — ${s.narration}`)
     .join("\n");
   const durationLine = params.videoDuration ? `المدة: ${Math.round(params.videoDuration)} ثانية` : params.audioDuration ? `المدة (من الصوت): ${Math.round(params.audioDuration)} ثانية` : "";
+  const captionsLine =
+    params.audioUrl && params.captions !== false
+      ? params.captionsUrl
+        ? `💬 الترجمة المتزامنة: ${params.captionsBurned === false ? "طلبت لكنها لم تُطبع" : "مطبوعة داخل الفيديو"} + ملف SRT: ${params.captionsUrl}`
+        : "💬 الترجمة المتزامنة: لم تتوفر توقيتات دقيقة من Edge-TTS هذه المرة — الفيديو بلا ترجمة"
+      : "";
   return [
     "✅ اكتمل خط إنتاج الفيديو بالكامل",
     "",
@@ -394,7 +586,9 @@ export function formatFullVideoCompleted(task: TaskRow): string {
     "🖼️ صور المشاهد:",
     scenesList,
     "",
-    params.audioUrl ? `🔊 التعليق الصوتي: ${params.audioUrl}` : "",
+    params.audioUrl ? `🔊 التعليق الصوتي: ${params.audioUrl}` : "🔕 فيديو صام بلا تعليق صوتي (scenes فقط)",
+    "",
+    captionsLine,
     "",
     "📜 السكربت:",
     params.script ?? "",
@@ -405,6 +599,11 @@ export function formatFullVideoCompleted(task: TaskRow): string {
     .join("\n");
 }
 
+/** حد مرور custom_script — يساوي حد Edge-TTS للنص الواحد */
+const CUSTOM_SCRIPT_MAX = 6000;
+/** حد طول برومبت المشهد الواحد الممرر من العميل */
+const CUSTOM_SCENE_MAX_CHARS = 900;
+
 /** التشغيل الأول — أداة create_full_video */
 export async function runFullVideo(opts: {
   topic: string;
@@ -413,6 +612,12 @@ export async function runFullVideo(opts: {
   language: "en" | "ar";
   style?: string;
   voice?: string;
+  /** سكربت التعليق الصوتي الجاهز من العميل — يُستخدم حرفيًا بلا تأليف Gemini */
+  customScript?: string;
+  /** برومبتات المشاهد الجاهزة من العميل — تُولَّد بالترتيب كما هي */
+  scenePrompts?: string[];
+  /** ترجمة متزامنة محروقة (افتراضي true) */
+  captions?: boolean;
   waitSeconds: number;
   onProgress?: (progress: number, message: string) => Promise<void> | void;
 }): Promise<
@@ -432,9 +637,32 @@ export async function runFullVideo(opts: {
   if (!mergerConfigured()) {
     return { kind: "invalid", text: "❌ خدمة الدمج meko-manger غير مهيأة على هذا الخادم (MERGER_API_BASE غير مضبوط) — خط الإنتاج يحتاجها لتركيب الفيديو النهائي." };
   }
+  // تطبيع مدخلات العميل الجاهزة
+  const customScript = (opts.customScript ?? "").trim();
+  if (customScript.length > CUSTOM_SCRIPT_MAX) {
+    return { kind: "invalid", text: `❌ custom_script طويل جدًا (${customScript.length} حرفًا) — الحد ${CUSTOM_SCRIPT_MAX} حرفًا (حد التحويل الصوتي نفسه).` };
+  }
+  const scenePrompts = (opts.scenePrompts ?? [])
+    .map((s) => (typeof s === "string" ? s.trim() : ""))
+    .filter(Boolean)
+    .slice(0, SCENE_MAX)
+    .map((s) => s.slice(0, CUSTOM_SCENE_MAX_CHARS));
+  if (opts.scenePrompts && opts.scenePrompts.length > 0 && scenePrompts.length === 0) {
+    return { kind: "invalid", text: "❌ scenes ممررة لكنها كلها فارغة — مرّر أوصافًا نصية حقيقية للمشاهد أو احذف المعامل." };
+  }
+  const captions = opts.captions !== false;
 
   const taskId = randomUUID();
   const n = sceneCountFor(durationSeconds);
+  // تهيئة المشاهد حسب الوضع:
+  //  custom_script + scenes → مشاهد من البرومبتات الجاهزة (الوضع A)
+  //  custom_script فقط     → عناصر نائبة تُقاس لاحقًا على عدد الجمل (الوضع B)
+  //  scenes فقط            → مشاهد جاهزة بلا صوت (الوضع C)
+  //  لا شيء                → عناصر نائبة بعدد المدة القياسي (الوضع D)
+  const initialScenes: FullVideoScene[] =
+    scenePrompts.length > 0
+      ? scenePrompts.map((p) => ({ narration: "", image_prompt: p }))
+      : Array.from({ length: n }, () => ({ narration: "", image_prompt: "" }));
   const params: FullVideoParams = {
     topic,
     language,
@@ -443,9 +671,14 @@ export async function runFullVideo(opts: {
     aspectRatio: opts.aspectRatio,
     targetDuration: durationSeconds,
     stage: "script",
-    scenes: Array.from({ length: n }, () => ({ narration: "", image_prompt: "" })),
+    scenes: initialScenes,
     failCount: 0,
+    captions,
   };
+  if (customScript) {
+    params.script = customScript;
+    params.customScript = true;
+  }
 
   await insertTask({
     id: taskId,

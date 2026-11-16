@@ -51,6 +51,8 @@ export function extForMime(mime: string): string {
   if (mime === "audio/wav") return "wav";
   if (mime === "audio/ogg") return "ogg";
   if (mime.startsWith("audio/")) return mime.slice(6).replace(/[^a-z0-9]/g, "") || "bin";
+  if (mime === "application/x-subrip" || mime === "text/srt") return "srt";
+  if (mime === "text/plain") return "txt";
   return "png";
 }
 
@@ -105,14 +107,16 @@ export async function uploadViaHosts(
                 if (signed) {
                   const direct = signed.replace(/["'<>].*$/, "");
                   // تحقق حي: الرابط الموقّع يجب أن يقدّم الملف الخام
-                  // (image/* أو audio/* أو octet-stream) — أي شيء آخر
-                  // (صفحة HTML، خطأ) يعني تغيّر السلوك → المضيف التالي
+                  // (image/* أو audio/* أو octet-stream أو نص غير HTML لملفات
+                  // الترجمة) — أي شيء آخر (صفحة HTML، خطأ) يعني تغيّر السلوك
+                  // → المضيف التالي
                   const probeCtrl = new AbortController();
                   const probeTimer = setTimeout(() => probeCtrl.abort(), Math.min(6_000, remaining()));
                   try {
                     const probe = await fetch(direct, { method: "GET", signal: probeCtrl.signal, headers: { "User-Agent": UPLOAD_UA } });
                     const ct = (probe.headers.get("content-type") || "").toLowerCase();
-                    if (probe.ok && (ct.startsWith("image/") || ct.startsWith("audio/") || ct === "application/octet-stream")) {
+                    const textOk = ct.startsWith("text/") && !ct.includes("html") && (mime === "application/x-subrip" || mime.startsWith("text/"));
+                    if (probe.ok && (ct.startsWith("image/") || ct.startsWith("audio/") || ct === "application/octet-stream" || textOk)) {
                       return direct;
                     }
                   } finally {

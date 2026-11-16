@@ -110,11 +110,15 @@ export interface MergerVideocutResult {
   size: number;
   scenes: number;
   hadAudio: boolean;
+  /** هل طُبعت الترجمة فعلاً على الفيديو؟ */
+  captions: boolean;
 }
 
 /**
- * POST /api/videocut — تحريك الصور إلى فيديو (Ken Burns + Crossfade + صوت).
+ * POST /api/videocut — تحريك الصور إلى فيديو (Ken Burns + Crossfade + صوت + ترجمة).
  * النداء متزامن: الخدمة تُعيد الفيديو النهائي في نفس الاستجابة (حتى 60 ثانية).
+ * captions_url: رابط ملف ترجمة SRT (http/https أو data:text/…;base64) —
+ * تُطبَع على الفيديو عبر فلاتر libass في خدمة الدمج.
  * أي خطأ معلن من الخدمة = MergerError declared=true (فشل نهائي بلا إعادة).
  */
 export async function mergerVideocut(spec: {
@@ -124,6 +128,7 @@ export async function mergerVideocut(spec: {
   transition?: number;
   resolution?: string;
   total_duration?: number;
+  captions_url?: string | null;
 }): Promise<MergerVideocutResult> {
   const { status, body } = await mergerFetch(
     "/api/videocut",
@@ -145,6 +150,7 @@ export async function mergerVideocut(spec: {
     size: typeof body.size === "number" ? body.size : 0,
     scenes: typeof body.scenes === "number" ? body.scenes : 0,
     hadAudio: body.had_audio === true,
+    captions: body.had_captions === true,
   };
 }
 

@@ -1,13 +1,17 @@
 /**
  * محرك تحريك الصور — images_to_video عبر ffmpeg داخل الدالة نفسها.
  *
- * يستقبل مصفوفة روابط صور + صوت اختياري ويخرج فيديو MP4 سينمائيًا:
+ * يستقبل مصفوفة روابط صور + صوت اختياري + ملف ترجمة اختياري ويخرج فيديو MP4 سينمائيًا:
  *  - حركة كاميرا ناعمة لكل صورة (Ken Burns): تدوير تلقائي بين
  *    zoom-in / zoom-out / pan-right / pan-left (تفصيل زمني سلس، بلا قفزات).
  *  - انتقالات Crossfade سلسة بين المشاهد (xfade، المدة افتراضيًا 0.6 ثانية).
  *  - مدة عرض كل صورة تُحسب تلقائيًا لتطابق إجمالي مدة الصوت تمامًا:
  *      sum(d_i) = audioDur + (n-1)*T  →  d_i = (audioDur + (n-1)*T) / n
  *  - بلا صوت؟ مدة قياسية لكل صورة (3.5 ثانية) أو total_duration من الطلب.
+ *  - ترجمة متزامنة اختيارية (captions_url: http/https أو data:text base64 لملف SRT):
+ *    تُطبع على الفيديو عبر فلتر subtitles/libass بخط Noto Sans Arabic مضمّن في
+ *    الخدمة (يدعم العربية والإنجليزية مع تشكيل واتجاه RTL صحيح عبر fribidi)،
+ *    ويُهيأ fontconfig بملف conf مؤقت ليجد الخط المضمّن بلا اعتماد على نظام الاستضافة.
  *  - دقة الهدف من aspect_ratio: 9:16 → 720×1280 (Shorts/Reels)،
  *    16:9 → 1280×720 (يوتيوب)؛ 1080p اختياري (1080×1920 / 1920×1080).
  *  - ترميز libx264 CRF 21 + preset veryfast (قابل للتجاوز بـ VIDEOCUT_PRESET)
@@ -27,6 +31,21 @@ const MAX_IMAGES = 20;
 const TRANSITION_DEFAULT = 0.6;
 const PER_IMAGE_DEFAULT = 3.5; // بلا صوت — مدة كل صورة بالثواني
 const FFMPEG_FPS = 30;
+const CAPTIONS_MAX_BYTES = 2 * 1048576;
+
+/** خط عربي/إنجليزي مضمّن مع الخدمة للترجمة (مسار ثابت ليُحتويه نشر Vercel)
+ *  المصدر: Noto Sans Arabic (SIL OFL 1.1) — github.com/notofonts/arabic.
+ *  نقرأه من القرص مرة واحدة عند تحميل الوحدة: نشر Vercel (NFT) يتتبع
+ *  readFileSync بمسار ثابت فيضمّن الملف في الـ lambda حتمًا، وفي زمن التشغيل
+ *  نكتبه من الذاكرة إلى tmpDir — فلا اعتماد إطلاقًا على خطوط نظام الاستضافة. */
+const CAPTIONS_FONT_FILE = path.join(__dirname, "..", "fonts", "NotoSansArabic-Regular.ttf");
+const CAPTIONS_FONT_FAMILY = "Noto Sans Arabic";
+let CAPTIONS_FONT_BYTES = null;
+try {
+  CAPTIONS_FONT_BYTES = fs.readFileSync(CAPTIONS_FONT_FILE);
+} catch {
+  /* على الاستضافة المحلية قد يغيب الخط — نكمل ببدائل النظام */
+}
 
 // ---------------------------------------------------------------------------
 // تشغيل الأوامر
@@ -108,6 +127,110 @@ async function audioDurationSec(binPath, filePath) {
 }
 
 // ---------------------------------------------------------------------------
+// الترجمة المتزامنة (captions)
+
+/** تهريب مسار داخل وسيط filter في ffmpeg (النقطتان والنص وحرف الهروب) */
+function escapeFilterPath(p) {
+  return String(p).replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
+}
+
+/**
+ * فلتر طباعة الترجمة على الفيديو — libass مع force_style:
+ *  - خط Noto Sans Arabic مضمّن (عربي + لاتيني) وتشكيل RTL عبر fribidi في libass.
+ *  - نص أبيض بحد خارجي أسود واضح + ظل خفيف نصف شفاف — مقروء على أي خلفية.
+ *  - الأحجام بوحدات PlayResY=288 (القالب الافتراضي لتحويل SRT) — Fontsize 15
+ *    ≈ 5% من ارتفاع الإطار أي إطار كان، وMarginV 18 ≈ هامش سفلي 6%.
+ *  - Alignment=2 (أسفل الوسط) مناسب للعمودي والأفقي معًا.
+ */
+function buildSubtitleFilter(srtPath) {
+  const style = [
+    `FontName=${CAPTIONS_FONT_FAMILY}`,
+    "Fontsize=15",
+    "PrimaryColour=&H00FFFFFF", // أبيض معتم
+    "OutlineColour=&H00000000", // حد خارجي أسود معتم — قراءة مضمونة
+    "BackColour=&H64000000", // ظل نصف شفاف
+    "BorderStyle=1",
+    "Outline=1.6",
+    "Shadow=0.8",
+    "Bold=0",
+    "Alignment=2",
+    "MarginL=16",
+    "MarginR=16",
+    "MarginV=18",
+    "Spacing=0.3",
+    "Encoding=1",
+  ].join(",");
+  return `subtitles=filename='${escapeFilterPath(srtPath)}':force_style='${style}'`;
+}
+
+/** ملف fontconfig مؤقت يجعل الخط المضمّن مرئيًا لـ libass بلا اعتماد على النظام */
+function writeFontConfig(tmpDir) {
+  const confPath = path.join(tmpDir, "fonts.conf");
+  // تجسيد الخط المضمّن من الذاكرة إلى tmpDir (يعمل حتى لو غاب عن قراءة /var/task)
+  let fontDir = null;
+  if (CAPTIONS_FONT_BYTES) {
+    try {
+      fontDir = path.join(tmpDir, "fonts");
+      fs.mkdirSync(fontDir, { recursive: true });
+      fs.writeFileSync(path.join(fontDir, "NotoSansArabic-Regular.ttf"), CAPTIONS_FONT_BYTES);
+    } catch {
+      fontDir = null;
+    }
+  }
+  if (!fontDir && fs.existsSync(CAPTIONS_FONT_FILE)) {
+    fontDir = path.dirname(CAPTIONS_FONT_FILE);
+  }
+  const dirs = [
+    fontDir ? `<dir>${fontDir}</dir>` : "",
+    "<dir>/usr/share/fonts</dir>",
+    "<dir>/usr/local/share/fonts</dir>",
+    "<dir>~/.fonts</dir>",
+  ].filter(Boolean).join("\n    ");
+  const conf = `<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+    ${dirs}
+    <cachedir>${path.join(tmpDir, "fc-cache")}</cachedir>
+</fontconfig>
+`;
+  fs.writeFileSync(confPath, conf);
+  return { confPath, hasBundledFont: !!fontDir };
+}
+
+/**
+ * تجهيز ملف الترجمة: تنزيل من رابط أو فكّ data URL → كتابة إلى tmpDir
+ * + تحقق أن المحتوى يشبه SRT. أي فشل = ترجمة بلا طباعة مع سبب واضح
+ * (لا يُفشل الفيديو كله بسبب ملف ترجمة سيئ).
+ */
+async function prepareCaptions(spec, tmpDir) {
+  if (spec.captions === false || !spec.captions_url) return { path: null, warning: null };
+  const raw = String(spec.captions_url);
+  const dest = path.join(tmpDir, "captions.srt");
+  try {
+    if (/^data:/i.test(raw)) {
+      const comma = raw.indexOf(",");
+      if (comma < 0) throw new Error("data URL بلا فاصلة بيانات");
+      const buf = Buffer.from(raw.slice(comma + 1), "base64");
+      if (buf.length < 8 || buf.length > CAPTIONS_MAX_BYTES) {
+        throw new Error(`ملف ترجمة data: بحجم غير منطقي (${buf.length} بايت)`);
+      }
+      await fs.promises.writeFile(dest, buf);
+    } else {
+      await downloadTo(raw, dest, CAPTIONS_MAX_BYTES);
+    }
+    const text = await fs.promises.readFile(dest, "utf8");
+    if (!text.includes("-->")) {
+      throw new Error("المحتوى لا يشبه ملف ترجمة SRT (لا يحتوي توقيتات -->)");
+    }
+    return { path: dest, warning: null };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await fs.promises.rm(dest, { force: true }).catch(() => {});
+    return { path: null, warning: `تعذر تجهيز ملف الترجمة — الفيديو بلا ترجمة: ${msg.slice(0, 200)}` };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // بناء فلاتر Ken Burns
 
 /** تعبيرات zoompan لكل تأثير — D عدد إطارات المشهد */
@@ -146,6 +269,12 @@ async function runVideocutJob(jobId, spec) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `vcut-${jobId}-`));
   const outputPath = path.join(tmpDir, "output.mp4");
   try {
+    // 0) تجهيز ملف الترجمة إن وُجد (فشله لا يوقف الفيديو — يُكمل بلا ترجمة فقط)
+    const captions = await prepareCaptions(spec, tmpDir);
+    if (captions.warning) {
+      console.warn(`[videocut:${jobId}] ${captions.warning}`);
+    }
+
     // 1) تنزيل الصور (2–20%) — تحقق من كل رابط قبل أي encode
     const imgPaths = [];
     for (let i = 0; i < images.length; i++) {
@@ -242,6 +371,12 @@ async function runVideocutJob(jobId, spec) {
       }
       filters.push(`[${prev}]format=yuv420p[vout]`);
     }
+    // طباعة الترجمة المتزامنة على الفيديو المدموج (libass + الخط المضمّن)
+    let videoLabel = "vout";
+    if (captions.path) {
+      filters.push(`[vout]${buildSubtitleFilter(captions.path)}[vsub]`);
+      videoLabel = "vsub";
+    }
     // الصوت
     filters.push(
       audioPath
@@ -250,7 +385,7 @@ async function runVideocutJob(jobId, spec) {
     );
 
     args.push("-filter_complex", filters.join(";"));
-    args.push("-map", "[vout]", "-map", "[aout]");
+    args.push("-map", `[${videoLabel}]`, "-map", "[aout]");
     args.push("-t", totalPlanned.toFixed(3)); // تقفيل دقيق على مدة الصوت
     args.push("-c:v", "libx264", "-crf", "21", "-preset", preset, "-r", String(fps));
     args.push("-c:a", "aac", "-b:a", "192k", "-ar", "44100");
@@ -260,8 +395,11 @@ async function runVideocutJob(jobId, spec) {
     await updateJob(jobId, { progress: 30 });
 
     // 4) الترميز مع قراءة التقدم (30–92%)
+    // fontconfig مخصص يجعل الخط المضمّن للترجمة مرئيًا لـ libass
+    const fontCfg = writeFontConfig(tmpDir);
+    const childEnv = { ...process.env, FONTCONFIG_FILE: fontCfg.confPath };
     await new Promise((resolve, reject) => {
-      const child = spawn(ffmpeg, args, { stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(ffmpeg, args, { stdio: ["ignore", "pipe", "pipe"], env: childEnv });
       let stderr = "";
       let lineBuf = "";
       child.stdout.on("data", (dt) => {
@@ -326,6 +464,8 @@ async function runVideocutJob(jobId, spec) {
       scenes: n,
       transition: T,
       had_audio: !!audioPath,
+      had_captions: !!captions.path,
+      ...(captions.warning ? { captions_error: captions.warning } : {}),
       expiresAt,
     };
   } catch (e) {
@@ -338,4 +478,4 @@ async function runVideocutJob(jobId, spec) {
 }
 
 
-module.exports = { runVideocutJob };
+module.exports = { runVideocutJob, buildSubtitleFilter, prepareCaptions, writeFontConfig, escapeFilterPath };

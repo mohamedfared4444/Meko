@@ -16,6 +16,7 @@
  */
 
 import { uploadViaHosts } from "./upload";
+import { buildSrt, parseEdgeMetadata, type WordTiming } from "./captions";
 
 /** الصوت الافتراضي */
 export const DEFAULT_VOICE = "en-US-AndrewNeural";
@@ -142,12 +143,15 @@ export interface TtsResult {
   mp3: Uint8Array;
   durationSec: number;
   voice: string;
+  /** توقيتات الكلمات من Edge (WordBoundary/SentenceBoundary) — عند طلبها فقط */
+  words?: WordTiming[];
 }
 
-/** توليد تعليق صوتي MP3 من نص — يعيد البايتات والمدة الدقيقة بالثواني */
+/** توليد تعليق صوتي MP3 من نص — يعيد البايتات والمدة الدقيقة بالثواني
+ *  (واختياريًا توقيتات كل كلمة لبناء الترجمة المتزامنة من نفس نداء Edge). */
 export async function synthesizeSpeech(
   text: string,
-  opts: { voice?: string; rate?: string; timeoutMs?: number } = {},
+  opts: { voice?: string; rate?: string; timeoutMs?: number; collectTimings?: boolean } = {},
 ): Promise<TtsResult> {
   const narration = text.trim();
   if (!narration) throw new Error("النص المطلوب نطقه فارغ");
@@ -158,22 +162,38 @@ export async function synthesizeSpeech(
 
   const { MsEdgeTTS, OUTPUT_FORMAT } = await import("msedge-tts");
   const tts = new MsEdgeTTS();
-  await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+  // تفعيل حدود الكلمات والجمل في metadata — تكلفتها ترف صغيرة وهي مصدر
+  // التوقيتات الدقيقة للترجمة المتزامنة (نفس نداء الصوت، بلا خدمات إضافية)
+  await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3, {
+    wordBoundaryEnabled: true,
+    sentenceBoundaryEnabled: true,
+  });
 
   // مهلة صارمة: فشل websocket المعلّق لا يجوز أن يمسك المهمة للأبد
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 30_000);
   try {
-    const { audioStream } = tts.toStream(narration, rate ? { rate } : undefined);
-    const chunks: Buffer[] = [];
-    for await (const chunk of audioStream as AsyncIterable<Buffer | Uint8Array>) {
-      chunks.push(Buffer.from(chunk as Buffer));
+    const { audioStream, metadataStream } = tts.toStream(narration, rate ? { rate } : undefined);
+    const collect = async (stream: AsyncIterable<Buffer | Uint8Array>, tolerate: boolean): Promise<Buffer> => {
+      const parts: Buffer[] = [];
+      try {
+        for await (const chunk of stream) parts.push(Buffer.from(chunk as Buffer));
+      } catch (e) {
+        // تدفق الميتاداتا يُغلق أحيانًا بقيمة «Premature close» بعد اكتمال الصوت
+        // — بياناته المجمّعة كافية للترجمة؛ أما تدفق الصوت فيجب أن ينجح كاملًا
+        if (!tolerate) throw e;
+      }
+      return Buffer.concat(parts);
+    };
+    const [audio, meta] = await Promise.all([
+      collect(audioStream as AsyncIterable<Buffer | Uint8Array>, false),
+      metadataStream ? collect(metadataStream as AsyncIterable<Buffer | Uint8Array>, true) : Promise.resolve(Buffer.alloc(0)),
+    ]);
+    if (audio.length < 512) {
+      throw new Error(`ناتج Edge-TTS فارغ أو تالف (${audio.length} بايت)`);
     }
-    const mp3 = Buffer.concat(chunks);
-    if (mp3.length < 512) {
-      throw new Error(`ناتج Edge-TTS فارغ أو تالف (${mp3.length} بايت)`);
-    }
-    return { mp3: new Uint8Array(mp3), durationSec: mp3DurationSeconds(mp3), voice };
+    const words = opts.collectTimings ? parseEdgeMetadata(meta) : undefined;
+    return { mp3: new Uint8Array(audio), durationSec: mp3DurationSeconds(audio), voice, words: words && words.length > 0 ? words : undefined };
   } finally {
     clearTimeout(timer);
     try {
@@ -187,12 +207,25 @@ export async function synthesizeSpeech(
 /**
  * توليد + رفع في خطوة واحدة — يعيد الرابط المباشر والمدة.
  * الرفع عبر السلسلة الموثوقة (لا يُلقي أبدًا؛ data URL كحل أخير).
+ * captions: بناء ملف ترجمة SRT من توقيتات Edge ورفعه — فشل الترجمة
+ * (رفع/بناء) لا يُفشل الصوت أبدًا؛ يعيد captionsUrl غير معرف فقط.
  */
 export async function generateVoiceover(
   text: string,
-  opts: { voice?: string; rate?: string; remainingMs?: () => number } = {},
-): Promise<{ url: string; durationSec: number; voice: string }> {
-  const res = await synthesizeSpeech(text, { voice: opts.voice, rate: opts.rate });
+  opts: { voice?: string; rate?: string; remainingMs?: () => number; captions?: boolean } = {},
+): Promise<{ url: string; durationSec: number; voice: string; captionsUrl?: string }> {
+  const res = await synthesizeSpeech(text, { voice: opts.voice, rate: opts.rate, collectTimings: opts.captions === true });
   const url = await uploadViaHosts(res.mp3, "audio/mpeg", opts.remainingMs);
-  return { url, durationSec: res.durationSec, voice: res.voice };
+  let captionsUrl: string | undefined;
+  if (opts.captions && res.words && res.words.length >= 2) {
+    try {
+      const srt = buildSrt(res.words.map((w) => ({ ...w })));
+      if (srt.trim()) {
+        captionsUrl = await uploadViaHosts(new TextEncoder().encode(srt), "application/x-subrip", opts.remainingMs);
+      }
+    } catch {
+      /* الترجمة إضافة اختيارية — فشلها لا يمس الصوت أبدًا */
+    }
+  }
+  return { url, durationSec: res.durationSec, voice: res.voice, captionsUrl };
 }

@@ -24,7 +24,7 @@ export const dynamic = "force-dynamic";
 // أقصى مدة دالة على خطة Vercel Hobby — نافذة الانتظار تُقصّ داخليًا عبر MCP_MAX_WAIT_SECONDS
 export const maxDuration = 60;
 
-const SERVER_INFO = { name: "media-generator-mcp", version: "1.3.1" } as const;
+const SERVER_INFO = { name: "media-generator-mcp", version: "1.4.0" } as const;
 
 const SERVER_INSTRUCTIONS = `AI media generation server (image: free Cloudflare Workers AI + free Pollinations first, then kie.ai + CometAPI; video: kie.ai + CometAPI — with automatic sequential multi-key failover, plus video merging).
 Workflow: call generate_image or generate_video. If the response contains finished URLs, show them to the user.
@@ -33,7 +33,7 @@ generate_image accepts an optional 'provider' argument (cloudflare | pollination
 IMPORTANT: the server automatically switches API keys in strict order on any failure (exhausted balance, invalid key, rate limits) and continues the SAME task under the same task_id — you will never encounter key/balance errors. Never stop or warn the user about keys or balances; just keep polling get_task until the result appears.
 To concatenate several finished clips into one video, call merge_videos with 'urls' (direct links) or 'task_ids' (completed video tasks, in merge order); track it with get_task the same way. Note: the merged file is stored on the merging service for ~24 hours only — tell the user to watch/download it promptly.
 Use list_media to recall previously generated media from the database.
-For a complete automated video from a single topic call create_full_video (topic, duration_seconds, aspect_ratio 9:16|16:9, language en|ar, optional style/voice): it writes the script with Gemini, generates narration audio via free Edge-TTS, generates consistent scene images, and merges everything with Ken Burns motion + crossfades into one MP4 — keep polling get_task until completed; the final response contains the script, all scene images, the audio link and the final video link.
+For a complete automated video from a single topic call create_full_video (topic, duration_seconds, aspect_ratio 9:16|16:9, language en|ar, optional style/voice/custom_script/scenes/captions): it writes the script with Gemini (or uses your ready custom_script verbatim), generates narration audio via free Edge-TTS, generates consistent scene images, and merges everything with Ken Burns motion + crossfades into one MP4 with synchronized captions burned in by default — keep polling get_task until completed; the final response contains the script, all scene images, the audio link, the SRT captions link and the final video link.
 Use generate_audio for standalone voiceover MP3s (free Edge-TTS neural voices, English + Arabic, optional rate) — it returns the direct audio URL and exact duration in seconds.`;
 
 // ---------------------------------------------------------------------------
@@ -294,26 +294,52 @@ function buildServer(): McpServer {
     "create_full_video",
     {
       description:
-        "End-to-end automated video pipeline from ONE topic. The server writes the voiceover script and scene breakdown with Google Gemini (structured JSON), generates the full narration audio via free Edge-TTS (returns exact duration), generates every scene image via the free provider chain (Cloudflare → Hugging Face → Gemini Imagen → Pollinations) with a consistent main character and style, then merges images + audio with cinematic Ken Burns camera motion and smooth crossfades via FFmpeg (meko-manger) into one MP4 sized exactly to the audio duration. Returns script + all scene images + audio link + final video link in ONE response. Takes minutes: you get live progress and a task_id — keep calling get_task every ~10 seconds until completed.",
+        "End-to-end automated video pipeline. Give a topic and the server writes the voiceover script with Google Gemini (strict word-count cap matched to duration_seconds: ~2.1 words/sec for Arabic, ~2.5 for English; no repeated titles, no generic filler — real focused narration only), OR pass your finished 'custom_script' to use it verbatim (optionally with ready 'scenes' image prompts used in order). It then generates the narration audio via free Edge-TTS, extracts per-word timings to build synchronized captions (clean SRT, burned into the video by default via FFmpeg), generates every scene image via the free provider chain (Cloudflare → Hugging Face → Gemini Imagen → Pollinations) with a consistent main character and style, then merges images + audio + captions with cinematic Ken Burns camera motion and smooth crossfades (meko-manger) into one MP4 sized exactly to the audio duration. Takes minutes: you get live progress and a task_id — keep calling get_task every ~10 seconds until completed. The final response contains script + scene images + audio link + SRT link + final video link.",
       inputSchema: {
-        topic: z.string().min(1).max(400).describe("The video idea or subject, e.g. 'How coffee changed the world' or 'قصة أقدم مكتبة في العالم'."),
-        duration_seconds: z.number().int().min(10).max(180).default(30).describe("Approximate total video length in seconds (10–180)."),
-        aspect_ratio: z.enum(["9:16", "16:9"]).default("9:16").describe("9:16 for Shorts/Reels/TikTok, 16:9 for YouTube."),
-        language: z.enum(["en", "ar"]).default("en").describe("Narration language — English (en) or Arabic (ar)."),
+        topic: z.string().min(1).max(400).describe("The video idea or subject, e.g. 'How coffee changed the world' or 'قصة أقدم مكتبة في العالم'. Used as context for scene imagery even when custom_script is passed."),
+        custom_script: z
+          .string()
+          .min(1)
+          .max(6000)
+          .optional()
+          .describe(
+            "Ready voiceover script from the caller — used VERBATIM for audio generation with no Gemini scriptwriting. Word count should match the target duration (~2.1 words/sec Arabic, ~2.5 words/sec English). If 'scenes' is omitted, Gemini only splits this script into matching visual scenes (it never rewrites the text).",
+          ),
+        scenes: z
+          .array(z.string().min(1).max(900))
+          .min(1)
+          .max(12)
+          .optional()
+          .describe(
+            "Ready image prompts (visual scene descriptions) used in order, one image per prompt, no Gemini rewriting. Pass together with custom_script (paired in order with its sentences) or alone (silent Ken Burns video with no voiceover).",
+          ),
+        duration_seconds: z.number().int().min(10).max(180).default(30).describe("Approximate total video length in seconds (10–180). Controls the Gemini word cap (ar 2.1 / en 2.5 words per second) and silent-video duration.").optional(),
+        aspect_ratio: z.enum(["9:16", "16:9"]).default("9:16").describe("9:16 for Shorts/Reels/TikTok, 16:9 for YouTube.").optional(),
+        language: z.enum(["en", "ar"]).default("en").describe("Narration language — English (en) or Arabic (ar). Used for the word cap and Gemini prompts when writing a new script.").optional(),
+        captions: z
+          .boolean()
+          .default(true)
+          .describe(
+            "Burn synchronized auto-captions into the final video (free: Edge-TTS word timings → clean readable SRT with Arabic+English support → FFmpeg burn-in). Default true. Ignored when there is no voiceover audio.",
+          )
+          .optional(),
         style: z.string().max(120).optional().describe("Visual style for all scenes, e.g. 'cinematic', '3d-animation', 'realistic', 'anime'."),
         voice: z.string().optional().describe("Optional Edge-TTS voice override (e.g. en-US-AriaNeural, ar-EG-ShakirNeural). Defaults: en → en-US-AndrewNeural, ar → ar-EG-ShakirNeural."),
-        wait_seconds: z.number().int().min(0).max(240).default(45).describe("How long to wait in this call before returning a task_id."),
+        wait_seconds: z.number().int().min(0).max(240).default(45).describe("How long to wait in this call before returning a task_id.").optional(),
       },
     },
     async (args, extra) => {
       try {
         const outcome = await runFullVideo({
           topic: args.topic,
-          durationSeconds: args.duration_seconds,
-          aspectRatio: args.aspect_ratio,
-          language: args.language,
+          durationSeconds: args.duration_seconds ?? 30,
+          aspectRatio: args.aspect_ratio ?? "9:16",
+          language: args.language ?? "en",
           style: args.style,
           voice: args.voice,
+          customScript: args.custom_script,
+          scenePrompts: args.scenes,
+          captions: args.captions !== false,
           waitSeconds: args.wait_seconds ?? 45,
           onProgress: makeProgressBridge(extra as HandlerExtra),
         });
