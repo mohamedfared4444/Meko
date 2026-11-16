@@ -12,7 +12,7 @@ module.exports = async (req, res) => {
   res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
   res.end(
     JSON.stringify({
-      version: "1.0.1",
+      version: "1.1.0",
       maxSources: LIMITS.MAX_SOURCES(),
       sourceMaxMB: LIMITS.SOURCE_MAX_MB(),
       outputMaxMB: LIMITS.OUTPUT_MAX_MB(),
@@ -25,9 +25,17 @@ module.exports = async (req, res) => {
         contract: "html_code with window.renderAtTime(t, duration, wordTimings) → MP4 frames via headless Chromium + ffmpeg image2pipe",
         defaultDurationSec: 15,
         maxDurationSec: 60,
-        defaultFps: 24,
+        defaultFps: 20,
         fpsRange: [8, 30],
-        defaultSize: "720x1280",
+        // Adaptive FPS: المشاهد ثقيلة تُخفَّض معدل إطاراتها تلقائيًا (حتى 12fps
+        // وأدنى عند الحاجة) بدل الرفض — الرندر يكتمل دائمًا بلا فشل
+        adaptiveFps: true,
+        defaultAspect: {
+          "9:16": "540x960",
+          "16:9": "960x540",
+          "1:1": "640x640",
+        },
+        defaultSize: "540x960",
         sizeRange: [240, 1280],
       },
     }),
