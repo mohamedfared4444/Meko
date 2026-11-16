@@ -218,6 +218,36 @@ export async function mergerCodeVideo(spec: {
 }
 
 /**
+ * POST /api/render-payload — تخزين حمولة الرندر الكامل على خدمة الدمج قبل
+ * إطلاق workflow على GitHub Actions (مدخلات GitHub محدودة ~64KB وكود المشهد
+ * يصل 300KB — فتُخزَّن الحمولة ويُمرر رابط تحميلها للعامل).
+ * تعيد payload_url الذي يقرأه العامل بـ GET قبل بدء الرندر (صلاحية 24 ساعة).
+ */
+export async function mergerStoreRenderPayload(payload: {
+  task_id: string;
+  job_id: string;
+  title?: string;
+  html_code: string;
+  audio_url?: string | null;
+  word_timings?: Array<{ start: number; end: number; text: string }> | null;
+  duration_seconds?: number | null;
+}): Promise<{ payloadId: string; payloadUrl: string }> {
+  const { status, body } = await mergerFetch(
+    "/api/render-payload",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+    30_000,
+  );
+  if (status < 200 || status >= 300) {
+    const err = typeof body.error === "string" ? body.error : `HTTP ${status}`;
+    throw new MergerError(err, status, true);
+  }
+  const payloadId = typeof body.payload_id === "string" ? body.payload_id : "";
+  const payloadUrl = typeof body.payload_url === "string" ? body.payload_url : "";
+  if (!payloadId || !payloadUrl) throw new MergerError("استجابة تخزين الحمولة بلا payload_id/payload_url", 502, true);
+  return { payloadId, payloadUrl };
+}
+
+/**
  * تحليل الحالة دفاعيًا (قسم 7.2):
  * - أكمل: done|completed|complete|success|succeeded|finished
  * - فشل:  error|failed|failure|cancelled — وقد يرد الجسم فيه error بدون status

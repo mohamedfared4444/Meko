@@ -144,8 +144,20 @@ function buildDetail(task: TaskRow): TaskDetail {
   return detail;
 }
 
+/** هل المهمة مُطلق رندرها الكامل على GitHub Actions (تُدار خارجيًا بحارس ركود خاص)؟ */
+function isGhDispatched(task: TaskRow): boolean {
+  if (task.model !== CODE_VIDEO_MODEL) return false;
+  try {
+    return (JSON.parse(task.params_json) as { renderDispatched?: boolean }).renderDispatched === true;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * 1) فشل تلقائي لأي مهمة تجاوزت المهلة القصوى (10 دقائق).
+ * 1) فشل تلقائي لأي مهمة تجاوزت المهلة القصوى (10 دقائق) — باستثناء مهام
+ *    الفيديو البرمجي المُطلق رندرها الكامل على GitHub Actions: هي غير متزامنة
+ *    بطبيعتها (دقائق عدة) وتُدار بحارس ركود خاص 40 دقيقة في codevideo.ts.
  * 2) تقدّم تلقائي لأول مهمتين جاريتين غير المقفلتين.
  * تعيد قائمة المهام بعد التقدم (إعادة قراءة واحدة عند حدوث أي تغيير).
  */
@@ -158,6 +170,7 @@ async function autoAdvance(
 
   for (const t of tasks) {
     if (t.status !== "processing" && t.status !== "pending") continue;
+    if (isGhDispatched(t)) continue; // الرندر الكامل يعمل على عامل خارجي — لا مهلة 10 دقائق
     const created = parseDbTime(t.created_at);
     if (!Number.isFinite(created) || now - created <= TASK_MAX_AGE_MS) continue;
     try {

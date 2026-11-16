@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { WordTiming } from "./captions";
-import { mergerCodeVideo, mergerConfigured, MergerError } from "./merger";
+import { mergerCodeVideo, mergerConfigured, mergerStoreRenderPayload, MergerError } from "./merger";
 import { synthesizeSpeech, normalizeVoice } from "./tts";
 import { uploadViaHosts } from "./upload";
-import { getTask, insertTask, updateTask } from "./turso";
+import { getMeta, getTask, insertTask, updateTask } from "./turso";
+import { sanitizeEnvValue } from "@/lib/env";
 import type { MediaType, TaskRow } from "./types";
 
 /**
@@ -14,11 +15,16 @@ import type { MediaType, TaskRow } from "./types";
  *
  *  1) صوت اختياري (script): Edge-TTS يولّد التعليق ويستخرج توقيتات كل كلمة
  *     من نفس النداء — ومدة الفيديو تُضبط تلقائيًا على مدة الصوت الفعلية.
- *  2) الرندر: نقطة /api/codevideo في meko-manger تفتح الصفحة بـ Chromium
- *     (puppeteer-core + @sparticuz/chromium) وتلتقط إطارًا لكل لحظة t —
- *     وتمرر توقيتات الكلمات wordTimings إلى renderAtTime في كل إطار
- *     حتى يتزامن الأنيميشن مع نطق كل كلمة — ثم تضخ الإطارات عبر stdin
- *     في ffmpeg (H.264/yuv420p) مع دمج الصوت.
+ *  2) الرندر الكامل (المسار الأساسي عند توفر GITHUB_TOKEN): تُخزّن الحمولة
+ *     (الكود + الصوت + التوقيتات) على خدمة الدمج ثم يُطلق workflow
+ *     render-code-video.yml على GitHub Actions — عامل ubuntu يرندر كل
+ *     الإطارات بمعدل 30fps ثابت وبأبعاد FHD كاملة (1080×1920) بلا أي تخفيض
+ *     أو مهلة، يرفع MP4 إلى meko-manger ويحدّث المهمة في Turso
+ *     (status=completed, progress=100, video_url=…) مباشرة.
+ *  3) الرندر الاحتياطي (بلا توكن): نقطة /api/codevideo في meko-manger تفتح
+ *     الصفحة بـ Chromium (puppeteer-core + @sparticuz/chromium) وتلتقط إطارًا
+ *     لكل لحظة t وتمرر wordTimings إلى renderAtTime في كل إطار ثم تضخ
+ *     الإطارات عبر stdin في ffmpeg (H.264/yuv420p) — مقاس سريع داخل مهلة الدالة.
  *
  * آلة حالات قابلة للاستكمال مثل full-video-pipeline: كل خطوة تحفظ تقدمها
  * في params_json (task_id واحد)، والتقدم يظهر حيًا في لوحة التحكم:
@@ -30,9 +36,71 @@ export const CODE_VIDEO_MODEL = "code-video-pipeline";
 
 const PIPELINE_BUDGET_MS = 45_000; // أقل من حد Vercel 60 ثانية بهامش آمن
 const MIN_ACTION_BUDGET_MS = 12_000; // أقل ميزانية لبدء توليد الصوت
-/** الرندر البرمجي متزامن على خدمة الدمج — يحتاج نافذة كاملة قبل البدء */
+/** الرندر البرمجي متزامن على خدمة الدمج — يحتاج نافذة كاملة قبل البدء (المسار الاحتياطي فقط) */
 const CODEVIDEO_MIN_BUDGET_MS = 30_000;
 const TTS_TIMEOUT_MS = 40_000;
+
+// ---------------------------------------------------------------------------
+// الرندر الكامل على GitHub Actions — FHD 30fps بلا أي تخفيض (خارج مهلة Vercel)
+
+/** المستودع الذي يُطلق عليه workflow الرندر الكامل */
+const GH_RENDER_REPO = sanitizeEnvValue(process.env.GH_RENDER_REPO) || "mohamedfared4444/Meko";
+/** الفرع المرجعي لإطلاق الـ workflow */
+const GH_RENDER_REF = sanitizeEnvValue(process.env.GH_RENDER_REF) || "main";
+const GH_WORKFLOW_FILE = "render-code-video.yml";
+/** المعدل الثابت الناعم للرندر الكامل — العامل يرندر الإطارات كلها بلا تخفيض */
+const GH_RENDER_FPS = 30;
+/** حارس ركود: بعد هذا الزمن من الإطلاق بلا نتيجة تُفشل المهمة (مهلة العامل 30 دقيقة + هامش) */
+const GH_RENDER_STALE_MS = 40 * 60_000;
+/** حد إرسال كود المشهد base64 داخل مدخلات الإطلاق (حد GitHub ~64KB إجمالًا) —
+ *  فوقه تُخزَّن الحمولة على خدمة الدمج ويُمرر رابطها payload_url */
+const GH_HTML_B64_LIMIT = 40_000;
+
+/**
+ * توكن إطلاق GitHub Actions — بيئة Vercel أولًا (GITHUB_TOKEN بصلاحية repo
+ * وworkflow، أو GH_RENDER_TOKEN كبديل مسمّى) ثم جدول meta في Turso
+ * (المفتاح github_token إن خُزّن من لوحة الإدارة).
+ * بلا توكن يعود خط الإنتاج تلقائيًا للرندر السريع على خدمة الدمج.
+ */
+async function getGitHubToken(): Promise<string | null> {
+  const fromEnv = sanitizeEnvValue(process.env.GH_RENDER_TOKEN) || sanitizeEnvValue(process.env.GITHUB_TOKEN);
+  if (fromEnv) return fromEnv;
+  const stored = await getMeta("github_token");
+  return stored ? sanitizeEnvValue(stored) || null : null;
+}
+
+/** هل الرندر الكامل على GitHub Actions مُهيّأ (توكن متاح)؟ */
+export async function ghRenderEnabled(): Promise<boolean> {
+  return (await getGitHubToken()) !== null;
+}
+
+/** إطلاق workflow الرندر الكامل — 204 = نجح الإطلاق، غير ذلك فشل حتمي معلن */
+async function dispatchRenderWorkflow(token: string, inputs: Record<string, string>): Promise<void> {
+  const url = `https://api.github.com/repos/${GH_RENDER_REPO}/actions/workflows/${GH_WORKFLOW_FILE}/dispatches`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ ref: GH_RENDER_REF, inputs }),
+  });
+  if (res.status === 204) return;
+  const text = await res.text().catch(() => "");
+  const hint =
+    res.status === 401 || res.status === 403
+      ? " — تأكد أن GITHUB_TOKEN صالح وبصلاحية repo/workflow وأن ملف الـ workflow موجود على الفرع المطلوب"
+      : res.status === 422
+        ? " — ملف الـ workflow غير موجود أو مدخلاته لا تطابق (تأكد من رفع .github/workflows/render-code-video.yml على الفرع)"
+        : "";
+  throw new MergerError(
+    `فشل إطلاق الرندر على GitHub Actions (HTTP ${res.status})${hint}: ${text.slice(0, 200)}`,
+    res.status,
+    true,
+  );
+}
 
 /** حدود كود المشهد الواحد (يحمي حجم الجسم 4.5MB وصفوف Turso) */
 export const HTML_CODE_MIN = 100;
@@ -45,10 +113,21 @@ const DURATION_MAX = 60;
 const DEFAULT_DURATION = 15;
 const DEFAULT_FPS = 20;
 
-/** مقاس الفيديو السريع لكل اتجاه — يقلل بكسلات Chromium Software Rasterizer
- *  ~45% مقارنة بـ 720p فيسرّع الالتقاط ويضمن اكتمال الرندر داخل مهلة الدالة،
- *  ويمكن رفع الأبعاد اختياريًا لاحقًا إن لزم (خدمة الدمج تقبل حتى 1280) */
-export function dimensionsFor(aspectRatio: "9:16" | "16:9" | "1:1"): { width: number; height: number } {
+/** مقاس الفيديو لكل اتجاه:
+ *  - mode "fhd" (الرندر الكامل على GitHub Actions): 1080×1920 / 1920×1080 / 1080×1080 بجودة كاملة
+ *  - mode "fast" (الرندر الاحتياطي داخل مهلة Vercel): 540×960 / 960×540 / 640×640
+ *    — يقلل بكسلات Chromium Software Rasterizer ~45% فيسرّع الالتقاط */
+export function dimensionsFor(aspectRatio: "9:16" | "16:9" | "1:1", mode: "fast" | "fhd" = "fast"): { width: number; height: number } {
+  if (mode === "fhd") {
+    switch (aspectRatio) {
+      case "16:9":
+        return { width: 1920, height: 1080 };
+      case "1:1":
+        return { width: 1080, height: 1080 };
+      default:
+        return { width: 1080, height: 1920 };
+    }
+  }
   switch (aspectRatio) {
     case "16:9":
       return { width: 960, height: 540 };
@@ -84,6 +163,14 @@ export interface CodeVideoParams {
   videoJobId?: string;
   videoFps?: number;
   videoFrames?: number;
+  /** الرندر الكامل: هل أُطلق workflow على GitHub Actions؟ (المهمة تُكمل خارجيًا) */
+  renderDispatched?: boolean;
+  /** لحظة الإطلاق (ISO) — مدخل حارس الركود */
+  dispatchedAt?: string;
+  /** معرف مهمة الدمج المرتبط بإطلاق الـ workflow (قدرة تحديث الناتج) */
+  ghJobId?: string;
+  /** أين رُندر الناتج فعليًا: github-actions | vercel */
+  renderHost?: string;
   /** عدّاد فشل مراكز التقدم للأمان */
   failCount: number;
   lastError?: string;
@@ -186,19 +273,96 @@ async function ensureAudio(taskId: string, params: CodeVideoParams, deadline: nu
 }
 
 // ---------------------------------------------------------------------------
-// 2) الرندر — نقطة /api/codevideo في meko-manger (متزامنة حتى ~58 ثانية)
+// 2) الرندر — المسار الأساسي: عامل GitHub Actions الكامل (FHD 30fps)؛
+//    والاحتياطي بلا توكن: نقطة /api/codevideo في meko-manger (متزامنة حتى ~58 ثانية)
 
 async function ensureRender(taskId: string, params: CodeVideoParams, deadline: number, onProgress: (p: number, msg: string) => Promise<void> | void): Promise<boolean> {
   if (params.videoUrl) return true;
+
+  const token = await getGitHubToken();
+  if (token) {
+    if (params.renderDispatched) {
+      // مُطلق سابقًا — بانتظار العامل، مع حارس ركود يفشل المهمة نهائيًا بعد المهلة
+      const at = Date.parse(params.dispatchedAt || "");
+      if (Number.isFinite(at) && Date.now() - at > GH_RENDER_STALE_MS) {
+        throw new MergerError(
+          `تجاوز الرندر الكامل على GitHub Actions مهلة الانتظار (${Math.round(GH_RENDER_STALE_MS / 60000)} دقيقة منذ الإطلاق) — راجع سجل الـ workflow ثم أعد إطلاقه يدويًا بالمعرفين نفسهما إن لزم.`,
+          undefined,
+          true,
+        );
+      }
+      await saveParams(taskId, params, { progress: 55, error_message: null });
+      return false;
+    }
+
+    await onProgress(50, "تجهيز الحمولة وإطلاق الرندر الكامل FHD 30fps على GitHub Actions…");
+    // أبعاد الجودة الكاملة والمعدل الثابت الناعم — يفرضان حتى على المهام القديمة
+    // المُنشئة بأبعاد الرندر السريع كي يخرج العامل دائمًا بـ FHD
+    const fhd = dimensionsFor(params.aspectRatio, "fhd");
+    params.width = fhd.width;
+    params.height = fhd.height;
+    params.fps = GH_RENDER_FPS;
+    const ghJobId = params.ghJobId ?? params.videoJobId ?? randomUUID();
+    params.ghJobId = ghJobId;
+    params.renderDispatched = true;
+    params.dispatchedAt = new Date().toISOString();
+
+    // كود المشهد يتجاوز حد مدخلات GitHub (~64KB) غالبًا — تُخزّن الحمولة على
+    // خدمة الدمج ويُمرر رابطها، وإن تعذر التخزين وكود صغير فيُمرر base64
+    const inputs: Record<string, string> = {
+      task_id: taskId,
+      job_id: ghJobId,
+      width: String(params.width),
+      height: String(params.height),
+      fps: String(GH_RENDER_FPS),
+      ...(params.durationSeconds ? { duration: String(params.durationSeconds) } : {}),
+      ...(params.audioUrl ? { audio_url: params.audioUrl } : {}),
+    };
+    let payloadStored = false;
+    if (mergerConfigured()) {
+      try {
+        const stored = await mergerStoreRenderPayload({
+          task_id: taskId,
+          job_id: ghJobId,
+          title: params.title,
+          html_code: params.htmlCode,
+          audio_url: params.audioUrl ?? null,
+          word_timings: params.wordTimings ?? null,
+          duration_seconds: params.durationSeconds ?? null,
+        });
+        inputs.payload_url = stored.payloadUrl;
+        payloadStored = true;
+      } catch {
+        /* تُجرب مسار base64 أدناه */
+      }
+    }
+    if (!payloadStored) {
+      if (params.htmlCode.length > GH_HTML_B64_LIMIT) {
+        throw new MergerError(
+          `تعذر تخزين حمولة المشهد على خدمة الدمج وكوده (${params.htmlCode.length} حرفًا) يتجاوز حد مدخلات الإطلاق (${GH_HTML_B64_LIMIT}) — أعد المحاولة لاحقًا.`,
+          undefined,
+          true,
+        );
+      }
+      inputs.html_code_b64 = Buffer.from(params.htmlCode, "utf8").toString("base64");
+    }
+
+    // احفظ حالة الإطلاق قبل النداء — أي فشل لاحق يصبح مرئيًا على المهمة نفسها
+    await saveParams(taskId, params, { progress: 52, error_message: null });
+    await dispatchRenderWorkflow(token, inputs);
+    return false; // غير متزامن — العامل يكمل المهمة في Turso مباشرة (completed/100/رابط الفيديو)
+  }
+
+  // المسار الاحتياطي (بلا توكن): رندر سريع داخل مهلة Vercel كما كان
   if (Date.now() > deadline - CODEVIDEO_MIN_BUDGET_MS) {
     await saveParams(taskId, params, { progress: 45, error_message: null });
     return false;
   }
-  await onProgress(50, "رندر إطارات المشهد عبر Chromium ودمجها بـ ffmpeg…");
+  await onProgress(50, "رندر إطارات المشهد عبر Chromium ودمجها بـ ffmpeg (رندر سريع — الرندر الكامل FHD يتطلب GITHUB_TOKEN)…");
   const result = await mergerCodeVideo({
     html_code: params.htmlCode,
     audio_url: params.audioUrl ?? null,
-    // المدة: مدة الصوت تحكم عند وجوده (الخدمة تكتشفها تلقائيًا) — وإلا المدة المطلوبة
+    // المدة: مدة الصوت تحكم عند وجودها (الخدمة تكتشفها تلقائيًا) — وإلا المدة المطلوبة
     ...(params.audioUrl ? {} : { duration_seconds: params.durationSeconds ?? DEFAULT_DURATION }),
     fps: params.fps,
     width: params.width,
@@ -212,6 +376,7 @@ async function ensureRender(taskId: string, params: CodeVideoParams, deadline: n
   params.videoJobId = result.jobId;
   params.videoFps = result.fps;
   params.videoFrames = result.frames;
+  params.renderHost = "vercel";
   await saveParams(taskId, params, {
     progress: 100,
     status: "completed",
@@ -242,7 +407,10 @@ async function advanceCodeVideo(
     if (!audioReady) return { kind: "processing", progress: params.videoUrl ? 90 : 20 };
 
     const rendered = await ensureRender(taskId, params, deadline, onProgress);
-    if (!rendered) return { kind: "processing", progress: 45 };
+    if (!rendered) {
+      // في الانتظار: مُطلق على GitHub Actions (55%) أو مؤجل لنافذة ضيقة (45%)
+      return { kind: "processing", progress: params.renderDispatched ? 55 : 45 };
+    }
     return { kind: "completed" };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

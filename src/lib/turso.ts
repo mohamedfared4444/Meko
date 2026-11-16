@@ -355,6 +355,30 @@ export async function deleteTasks(ids: string[]): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
+// إعدادات عامة (جدول meta — key/value)
+
+/** قراءة قيمة إعداد مخزّن في جدول meta — null عند غيابه أو تعذر الوصول */
+export async function getMeta(key: string): Promise<string | null> {
+  try {
+    await ensureSchema();
+    const r = await getTurso().execute({ sql: `SELECT value FROM meta WHERE key = ?`, args: [key] });
+    const v = r.rows[0]?.value;
+    return v === null || v === undefined ? null : String(v);
+  } catch {
+    return null;
+  }
+}
+
+/** كتابة/تحديث قيمة إعداد في جدول meta */
+export async function setMeta(key: string, value: string): Promise<void> {
+  await ensureSchema();
+  await getTurso().execute({
+    sql: `INSERT INTO meta (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    args: [key, value],
+  });
+}
+
+// ---------------------------------------------------------------------------
 // عمليات المفاتيح
 
 /**

@@ -126,7 +126,13 @@ function ensureSchema() {
           data BLOB NOT NULL,
           PRIMARY KEY (job_id, chunk_seq)
         );
+        CREATE TABLE IF NOT EXISTS render_payloads (
+          id TEXT PRIMARY KEY,
+          payload TEXT NOT NULL,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
         CREATE INDEX IF NOT EXISTS idx_jobs_expires ON jobs (expires_at);
+        CREATE INDEX IF NOT EXISTS idx_render_payloads_created ON render_payloads (created_at);
       `);
     })().catch((e) => {
       schemaPromise = null;
@@ -227,7 +233,8 @@ async function deleteJobCascade(id) {
   );
 }
 
-/** التنظيف الكسول: حذف المهام المنتهية (expires_at = created_at + 24 ساعة) */
+/** التنظيف الكسول: حذف المهام المنتهية (expires_at = created_at + 24 ساعة)
+ *  وحمولات الرندر المخزّنة من Meko لخط GitHub Actions (أقدم من 24 ساعة) */
 async function cleanupExpired() {
   await ensureSchema();
   const db = getDb();
@@ -236,6 +243,7 @@ async function cleanupExpired() {
   for (const id of ids) {
     await deleteJobCascade(id);
   }
+  await db.execute(`DELETE FROM render_payloads WHERE created_at <= datetime('now', '-24 hours')`);
   return ids.length;
 }
 

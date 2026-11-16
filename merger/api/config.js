@@ -37,6 +37,14 @@ module.exports = async (req, res) => {
         },
         defaultSize: "540x960",
         sizeRange: [240, 1280],
+        // الرندر الكامل FHD 30fps — عامل GitHub Actions يرفع الناتج هنا
+        // (render-complete) وتُحدَّث المهمة في Turso عبرنا
+        fullRender: {
+          engine: "github-actions workflow_dispatch render-code-video.yml",
+          resolution: "1080x1920 (9:16) / 1920x1080 (16:9) / 1080x1080 (1:1)",
+          fps: 30,
+          endpoints: ["/api/render-payload", "/api/render-complete"],
+        },
       },
     }),
   );

@@ -66,7 +66,8 @@ db/
 tests/
 examples/
 mini-services/
-scripts/
+scripts/*
+!scripts/render-code-video.js
 Caddyfile
 prisma/
 upload/
