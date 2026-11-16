@@ -8,6 +8,12 @@
  *  - مدة عرض كل صورة تُحسب تلقائيًا لتطابق إجمالي مدة الصوت تمامًا:
  *      sum(d_i) = audioDur + (n-1)*T  →  d_i = (audioDur + (n-1)*T) / n
  *  - بلا صوت؟ مدة قياسية لكل صورة (3.5 ثانية) أو total_duration من الطلب.
+ *  - موسيقى خلفية اختيارية (bg_music_url: http/https أو data:audio base64):
+ *    FFmpeg يكررها (stream_loop) ويقصها ليطابق مدة الفيديو تمامًا، يخفضها
+ *    (volume=0.12 ≈ -18dB) مع تلاشٍ ختامي في آخر ثانيتين (afade out)،
+ *    ويدمجها مع صوت التعليق الأساسي عبر amix (بلا تطبيع — normalize=0
+ *    كي لا يُخفض صوت المتحدث). بلا تعليق صوتي تصبح الموسيقى المسار الوحيد
+ *    بمستوى مناسب. فشل تجهيز الموسيقى لا يفشل الفيديو — يُكمل بلا موسيقى.
  *  - ترجمة متزامنة اختيارية (captions_url: http/https أو data:text base64 لملف SRT):
  *    تُطبع على الفيديو عبر فلتر subtitles/libass بخط Noto Sans Arabic مضمّن في
  *    الخدمة عبر «fontsdir» المباشر (لا تعتمد على fontconfig نظام الاستضافة إطلاقًا
@@ -36,6 +42,12 @@ const TRANSITION_DEFAULT = 0.6;
 const PER_IMAGE_DEFAULT = 3.5; // بلا صوت — مدة كل صورة بالثواني
 const FFMPEG_FPS = 30;
 const CAPTIONS_MAX_BYTES = 2 * 1048576;
+/** مستوى موسيقى الخلفية بجانب التعليق الصوتي — 0.12 ≈ -18dB كما طُلب */
+const MUSIC_MIX_VOLUME = "0.12";
+/** مستوى الموسيقى عندما تكون المسار الصوتي الوحيد (بلا تعليق صوتي) */
+const MUSIC_SOLO_VOLUME = "0.9";
+/** طول التلاشي الختامي للموسيقى بالثواني */
+const MUSIC_FADE_OUT_SEC = 2;
 
 /** خطوط عربي/لاتيني مضمّنة مع الخدمة للترجمة (مسارات ثابتة ليُحتويها نشر Vercel)
  *  - Noto Sans Arabic: العربية بأشكال اتصال كاملة (GSUB) + أرقام وترقيم أساسي —
@@ -365,6 +377,27 @@ async function runVideocutJob(jobId, spec) {
       audioDur = await audioDurationSec(probe, audioPath);
     }
 
+    // 2-b) موسيقى الخلفية الاختيارية — فشلها لا يوقف الفيديو (يُكمل بلا موسيقى)
+    let musicPath = null;
+    let musicWarning = null;
+    if (spec.bg_music_url && /^(https?:\/\/|data:audio\/)/i.test(String(spec.bg_music_url))) {
+      try {
+        musicPath = path.join(tmpDir, "music.bin");
+        if (/^data:audio\//i.test(String(spec.bg_music_url))) {
+          const b64 = String(spec.bg_music_url).slice(String(spec.bg_music_url).indexOf(",") + 1);
+          const buf = Buffer.from(b64, "base64");
+          if (buf.length < 128) throw new Error("ملف موسيقى data: تالف");
+          await fs.promises.writeFile(musicPath, buf);
+        } else {
+          await downloadTo(spec.bg_music_url, musicPath, 30 * 1048576, "audio");
+        }
+      } catch (e) {
+        musicPath = null;
+        musicWarning = `تعذر تجهيز موسيقى الخلفية — الفيديو بلا موسيقى: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}`;
+        console.warn(`[videocut:${jobId}] ${musicWarning}`);
+      }
+    }
+
     const n = imgPaths.length;
     const targetTotal = audioDur > 0 ? audioDur : Math.max(1, Number(spec.total_duration) || PER_IMAGE_DEFAULT * n);
     // مدة كل مشهد بحيث مجموع الفيديو بعد الانتقالات يساوي هدفنا:
@@ -391,9 +424,19 @@ async function runVideocutJob(jobId, spec) {
 
     for (const p of imgPaths) args.push("-i", p); // مدخلات الصور 0..n-1
     let audioInput = -1;
+    let musicInput = -1;
     if (audioPath) {
       args.push("-i", audioPath); // مدخل الصوت n
       audioInput = n;
+      if (musicPath) {
+        // مدخل الموسيقى n+1 — تكرار لا نهائي (stream_loop) يُقص لاحقًا على مدة الفيديو
+        args.push("-stream_loop", "-1", "-i", musicPath);
+        musicInput = n + 1;
+      }
+    } else if (musicPath) {
+      // بلا تعليق صوتي — الموسيقى هي المسار الصوتي الوحيد (لا حاجة لـ anullsrc)
+      args.push("-stream_loop", "-1", "-i", musicPath);
+      musicInput = n;
     } else {
       args.push("-f", "lavfi", "-t", totalPlanned.toFixed(3), "-i", "anullsrc=channel_layout=stereo:sample_rate=44100");
       audioInput = n;
@@ -432,12 +475,29 @@ async function runVideocutJob(jobId, spec) {
       filters.push(`[vout]${buildSubtitleFilter(captions.path, { fontDir: fontCfg.fontDir, isPortrait, height: h })}[vsub]`);
       videoLabel = "vsub";
     }
-    // الصوت
-    filters.push(
-      audioPath
-        ? `[${audioInput}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,apad[aout]`
-        : `[${audioInput}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[aout]`,
-    );
+    // الصوت — التعليق الأساسي + موسيقى الخلفية المدمجة (إن وُجدت)
+    // التلاشي الختامي للموسيقى في آخر ثانيتين من مدة الفيديو
+    const musicFadeStart = Math.max(0, totalPlanned - MUSIC_FADE_OUT_SEC).toFixed(3);
+    if (audioPath && musicInput >= 0) {
+      // تعليق + موسيقى: خفض الموسيقى (volume=0.12 ≈ -18dB) + تلاشٍ ختامي
+      // + دمج amix بلا تطبيع (normalize=0) كي لا يُخفض صوت المتحدث
+      filters.push(`[${audioInput}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,apad[voicepre]`);
+      filters.push(
+        `[${musicInput}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,` +
+          `volume=${MUSIC_MIX_VOLUME},afade=t=out:st=${musicFadeStart}:d=${MUSIC_FADE_OUT_SEC.toFixed(1)}[musicpre]`,
+      );
+      filters.push(`[voicepre][musicpre]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[aout]`);
+    } else if (audioPath) {
+      filters.push(`[${audioInput}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,apad[aout]`);
+    } else if (musicInput >= 0) {
+      // بلا تعليق صوتي — الموسيقى المسار الوحيد بمستوى مناسب + تلاشٍ ختامي
+      filters.push(
+        `[${musicInput}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,` +
+          `volume=${MUSIC_SOLO_VOLUME},afade=t=out:st=${musicFadeStart}:d=${MUSIC_FADE_OUT_SEC.toFixed(1)}[aout]`,
+      );
+    } else {
+      filters.push(`[${audioInput}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[aout]`);
+    }
 
     args.push("-filter_complex", filters.join(";"));
     args.push("-map", `[${videoLabel}]`, "-map", "[aout]");
@@ -518,8 +578,10 @@ async function runVideocutJob(jobId, spec) {
       scenes: n,
       transition: T,
       had_audio: !!audioPath,
+      had_bg_music: !!musicPath,
       had_captions: !!captions.path,
       ...(captions.warning ? { captions_error: captions.warning } : {}),
+      ...(musicWarning ? { bg_music_error: musicWarning } : {}),
       expiresAt,
     };
   } catch (e) {

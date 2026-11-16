@@ -60,6 +60,8 @@ interface TaskDetail {
   currentProvider: string | null;
   /** آخر ملاحظة/خطأ مسجل على المهمة */
   lastNote: string | null;
+  /** حزمة النشر الجاهزة (عناوين + وصف + هاشتاغات) — من params_json.seoPack */
+  seo: { titles: string[]; description: string; hashtags: string[] } | null;
 }
 
 /** المزود من آخر محاولة في سجل المحاولات */
@@ -74,6 +76,17 @@ function lastAttemptProvider(task: TaskRow): string | null {
   }
 }
 
+/** حزمة SEO من params_json — تنظيف دفاعي قبل العرض في اللوحة */
+function parseSeoPack(raw: unknown): TaskDetail["seo"] {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as { titles?: unknown; description?: unknown; hashtags?: unknown };
+  const titles = Array.isArray(obj.titles) ? (obj.titles as unknown[]).filter((t): t is string => typeof t === "string" && t.trim().length > 0).slice(0, 3) : [];
+  const hashtags = Array.isArray(obj.hashtags) ? (obj.hashtags as unknown[]).filter((h): h is string => typeof h === "string" && h.trim().length > 0).slice(0, 15) : [];
+  const description = typeof obj.description === "string" && obj.description.trim() ? obj.description.trim() : "";
+  if (titles.length === 0 || !description || hashtags.length === 0) return null;
+  return { titles, description, hashtags };
+}
+
 /** بناء تفاصيل حية من params_json لمهام full-video-pipeline (وأساسيات لغيرها) */
 function buildDetail(task: TaskRow): TaskDetail {
   const detail: TaskDetail = {
@@ -84,6 +97,7 @@ function buildDetail(task: TaskRow): TaskDetail {
     audioUrl: null,
     currentProvider: task.provider ?? lastAttemptProvider(task),
     lastNote: task.error_message,
+    seo: null,
   };
   if (task.model !== FULL_VIDEO_MODEL) return detail;
   try {
@@ -93,12 +107,14 @@ function buildDetail(task: TaskRow): TaskDetail {
       audioUrl?: string;
       videoUrl?: string;
       stage?: string;
+      seoPack?: unknown;
     };
     const scenes = Array.isArray(p.scenes) ? p.scenes : [];
     detail.scenesTotal = scenes.length || null;
     detail.scenesDone = scenes.filter((s) => s.image_url).length || 0;
     detail.hasAudio = !!p.audioUrl;
     detail.audioUrl = p.audioUrl ?? null;
+    detail.seo = parseSeoPack(p.seoPack);
     // المرحلة الفعلية تُشتق من حالة التقدم نفسها (أدق من حقل stage المخزن):
     // فيديو جاهز/كل الصور → الدمج، صوت جاهز → الصور، سكربت جاهز → الصوت، وإلا السكربت
     const allImages = scenes.length > 0 && scenes.every((s) => s.image_url);

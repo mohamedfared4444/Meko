@@ -5,6 +5,10 @@
  * الترجمة المتزامنة: مرّر captions_url (رابط http/https لملف SRT أو
  * data:text/…;base64) مع captions: true (الافتراضي) ليطبع FFmpeg الترجمة
  * على الفيديو النهائي بخط عربي/إنجليزي مضمّن في الخدمة.
+ *
+ * موسيقى الخلفية: مرّر bg_music_url (رابط http/https أو data:audio/… بصيغة base64)
+ * ليكرر FFmpeg الملف/يقصه ليطابق مدة الفيديو ويخفض صوته (volume=0.12 ≈ -18dB)
+ * مع تلاشٍ ختامي في آخر ثانيتين، ويدمجه مع صوت التعليق الأساسي عبر amix.
  */
 
 const crypto = require("crypto");
@@ -37,6 +41,15 @@ async function handleVideocut(req, res) {
     return sendError(res, 400, "رابط الصوت غير صالح — يجب أن يكون http/https أو data:audio/…");
   }
 
+  // موسيقى الخلفية الاختيارية — نفس قيود رابط الصوت
+  const bgMusicUrl = typeof body.bg_music_url === "string" ? body.bg_music_url.trim() : "";
+  if (bgMusicUrl && !/^(https?:\/\/|data:audio\/)/i.test(bgMusicUrl)) {
+    return sendError(res, 400, "رابط موسيقى الخلفية غير صالح — يجب أن يكون http/https أو data:audio/… بصيغة base64");
+  }
+  if (bgMusicUrl.length > CAPTIONS_MAX_CHARS) {
+    return sendError(res, 413, "ملف موسيقى الخلفية كبير جدًا (الحد 3MB)");
+  }
+
   // ملف الترجمة: http/https أو data:text/… أو data:application/… (base64)
   const captionsUrl = typeof body.captions_url === "string" ? body.captions_url.trim() : "";
   if (captionsUrl && !/^(https?:\/\/|data:text\/|data:application\/)/i.test(captionsUrl)) {
@@ -53,13 +66,14 @@ async function handleVideocut(req, res) {
   await insertJob({
     id: jobId,
     status: "queued",
-    sources_json: JSON.stringify([{ kind: "videocut", images, audio_url: body.audio_url || null, captions_url: captions ? captionsUrl || null : null, captions, aspect_ratio: body.aspect_ratio || "9:16", transition: body.transition || null, resolution: body.resolution || "720p", total_duration: body.total_duration || null }]),
+    sources_json: JSON.stringify([{ kind: "videocut", images, audio_url: body.audio_url || null, bg_music_url: bgMusicUrl || null, captions_url: captions ? captionsUrl || null : null, captions, aspect_ratio: body.aspect_ratio || "9:16", transition: body.transition || null, resolution: body.resolution || "720p", total_duration: body.total_duration || null }]),
     expires_at: expiresAt,
   });
 
   const result = await runVideocutJob(jobId, {
     images,
     audio_url: body.audio_url || null,
+    bg_music_url: bgMusicUrl || null,
     captions_url: captions ? captionsUrl || null : null,
     captions,
     aspect_ratio: body.aspect_ratio || "9:16",

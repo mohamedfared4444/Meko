@@ -112,6 +112,8 @@ export interface MergerVideocutResult {
   hadAudio: boolean;
   /** هل طُبعت الترجمة فعلاً على الفيديو؟ */
   captions: boolean;
+  /** هل دُمجت موسيقى الخلفية فعلاً؟ */
+  bgMusic: boolean;
 }
 
 /**
@@ -129,6 +131,8 @@ export async function mergerVideocut(spec: {
   resolution?: string;
   total_duration?: number;
   captions_url?: string | null;
+  /** موسيقى خلفية اختيارية — FFmpeg يكررها/يقصها ويخفضها (volume=0.12) ويدمجها amix */
+  bg_music_url?: string | null;
 }): Promise<MergerVideocutResult> {
   const { status, body } = await mergerFetch(
     "/api/videocut",
@@ -151,6 +155,7 @@ export async function mergerVideocut(spec: {
     scenes: typeof body.scenes === "number" ? body.scenes : 0,
     hadAudio: body.had_audio === true,
     captions: body.had_captions === true,
+    bgMusic: body.had_bg_music === true,
   };
 }
 

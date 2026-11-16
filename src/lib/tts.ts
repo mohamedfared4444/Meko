@@ -5,7 +5,8 @@
  *
  * الصوت الافتراضي en-US-AndrewNeural مع كتالوج أصوات مدعومة
  * (en-US-AriaNeural، en-US-GuyNeural، ar-EG-ShakirNeural، ar-SA-HamedNeural…)
- * وتحكم في سرعة النطق rate (+10% / -15% …).
+ * وتحكم في سرعة النطق rate (+10% / -15% …) وطبقة النبرة pitch (+0Hz / -2Hz …)
+ * لإلقاء أكثر حيوية وطبيعية.
  *
  * مدة الملف بالثواني تُحسب بدقة من عدّ إطارات MP3 نفسها (محوّل CBR ثابت
  * 48kbit/24kHz من Edge) — بلا اعتماد على ffprobe داخل التطبيق الرئيسي.
@@ -54,6 +55,23 @@ export function sanitizeRate(rate?: string): string | undefined {
   if (!m) return undefined;
   const pct = Math.min(50, Math.max(5, Number(m[2])));
   return `${m[1]}${pct}%`;
+}
+
+/**
+ * تنقية طبقة النبرة — تقبل +0Hz / -2Hz / +3st … وتقصر إلى ±50Hz.
+ * «+0Hz» أو القيم الصفرية تعني «بلا تغيير» فتعيد undefined (لا تُمرر لـ Edge).
+ */
+export function sanitizePitch(pitch?: string): string | undefined {
+  const raw = (pitch ?? "").trim();
+  let m = raw.match(/^([+-])(\d{1,2})Hz$/i);
+  if (m) {
+    const hz = Math.min(50, Number(m[2]));
+    return hz > 0 ? `${m[1]}${hz}Hz` : undefined;
+  }
+  // نصف نغمات (+2st) — SSML يقبلها أيضًا، نمررها كما هي بعد تحقق الشكل
+  m = raw.match(/^([+-])(\d{1,2})st$/i);
+  if (m && Number(m[2]) > 0 && Number(m[2]) <= 25) return `${m[1]}${Number(m[2])}st`;
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -148,10 +166,11 @@ export interface TtsResult {
 }
 
 /** توليد تعليق صوتي MP3 من نص — يعيد البايتات والمدة الدقيقة بالثواني
- *  (واختياريًا توقيتات كل كلمة لبناء الترجمة المتزامنة من نفس نداء Edge). */
+ *  (واختياريًا توقيتات كل كلمة لبناء الترجمة المتزامنة من نفس نداء Edge).
+ *  rate وpitch اختياريان للتحكم في الإلقاء (+10%، -2Hz …). */
 export async function synthesizeSpeech(
   text: string,
-  opts: { voice?: string; rate?: string; timeoutMs?: number; collectTimings?: boolean } = {},
+  opts: { voice?: string; rate?: string; pitch?: string; timeoutMs?: number; collectTimings?: boolean } = {},
 ): Promise<TtsResult> {
   const narration = text.trim();
   if (!narration) throw new Error("النص المطلوب نطقه فارغ");
@@ -159,6 +178,7 @@ export async function synthesizeSpeech(
 
   const voice = normalizeVoice(opts.voice);
   const rate = sanitizeRate(opts.rate);
+  const pitch = sanitizePitch(opts.pitch);
 
   const { MsEdgeTTS, OUTPUT_FORMAT } = await import("msedge-tts");
   const tts = new MsEdgeTTS();
@@ -173,7 +193,8 @@ export async function synthesizeSpeech(
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 30_000);
   try {
-    const { audioStream, metadataStream } = tts.toStream(narration, rate ? { rate } : undefined);
+    const prosody = rate || pitch ? { ...(rate ? { rate } : {}), ...(pitch ? { pitch } : {}) } : undefined;
+    const { audioStream, metadataStream } = tts.toStream(narration, prosody);
     const collect = async (stream: AsyncIterable<Buffer | Uint8Array>, tolerate: boolean): Promise<Buffer> => {
       const parts: Buffer[] = [];
       try {
@@ -212,9 +233,9 @@ export async function synthesizeSpeech(
  */
 export async function generateVoiceover(
   text: string,
-  opts: { voice?: string; rate?: string; remainingMs?: () => number; captions?: boolean } = {},
+  opts: { voice?: string; rate?: string; pitch?: string; remainingMs?: () => number; captions?: boolean } = {},
 ): Promise<{ url: string; durationSec: number; voice: string; captionsUrl?: string }> {
-  const res = await synthesizeSpeech(text, { voice: opts.voice, rate: opts.rate, collectTimings: opts.captions === true });
+  const res = await synthesizeSpeech(text, { voice: opts.voice, rate: opts.rate, pitch: opts.pitch, collectTimings: opts.captions === true });
   const url = await uploadViaHosts(res.mp3, "audio/mpeg", opts.remainingMs);
   let captionsUrl: string | undefined;
   if (opts.captions && res.words && res.words.length >= 2) {

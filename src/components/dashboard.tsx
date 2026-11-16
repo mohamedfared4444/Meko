@@ -45,6 +45,8 @@ interface TaskDetail {
   audioUrl: string | null;
   currentProvider: string | null;
   lastNote: string | null;
+  /** حزمة النشر الجاهزة (عناوين + وصف + هاشتاغات) — من params_json.seoPack */
+  seo: { titles: string[]; description: string; hashtags: string[] } | null;
 }
 
 interface TaskItem {
@@ -504,6 +506,60 @@ function ArchiveSection({ completed, failed }: { completed: TaskItem[]; failed: 
   );
 }
 
+/** زر نسخ صغير — ينسخ نصًا إلى الحافظة مع إشعار */
+function CopyButton({ text, label }: { text: string; label?: string }) {
+  return (
+    <button
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          toast.success("تم النسخ إلى الحافظة");
+        } catch {
+          toast.error("تعذر النسخ من المتصفح");
+        }
+      }}
+      title={label ?? "نسخ"}
+      className="shrink-0 rounded-md border border-white/10 bg-white/5 hover:bg-white/15 px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors"
+    >
+      نسخ
+    </button>
+  );
+}
+
+/** حزمة النشر الجاهزة (SEO) داخل تفاصيل المهمة المكتملة — جاهزة للنسخ */
+function SeoPackBlock({ seo }: { seo: NonNullable<TaskDetail["seo"]> }) {
+  const hashtagsText = seo.hashtags.join(" ");
+  return (
+    <div className="rounded-lg border border-primary/25 bg-primary/[0.07] px-3 py-2.5 space-y-2">
+      <div className="flex items-center gap-1.5">
+        <span className="text-[12px] font-bold text-primary">🚀 حزمة النشر الجاهزة (SEO)</span>
+      </div>
+      <div className="space-y-1">
+        {seo.titles.map((t, i) => (
+          <div key={i} className="flex items-start gap-1.5">
+            <span className="text-[11px] leading-relaxed text-foreground/90 flex-1" dir="auto">
+              {i + 1}. {t}
+            </span>
+            <CopyButton text={t} label="نسخ العنوان" />
+          </div>
+        ))}
+      </div>
+      <div className="flex items-start gap-1.5">
+        <p className="text-[11px] leading-relaxed text-foreground/80 whitespace-pre-line flex-1 line-clamp-4" dir="auto" title={seo.description}>
+          {seo.description}
+        </p>
+        <CopyButton text={seo.description} label="نسخ الوصف" />
+      </div>
+      <div className="flex items-start gap-1.5">
+        <p className="text-[11px] leading-relaxed text-primary/90 flex-1 break-words" dir="ltr">
+          {hashtagsText}
+        </p>
+        <CopyButton text={hashtagsText} label="نسخ الهاشتاغات" />
+      </div>
+    </div>
+  );
+}
+
 function CompletedCard({ task }: { task: TaskItem }) {
   const httpUrls = task.urls.filter(isHttpUrl);
   const embedded = task.urls.length - httpUrls.length;
@@ -517,6 +573,7 @@ function CompletedCard({ task }: { task: TaskItem }) {
       <p className="text-[11px] text-muted-foreground line-clamp-2" title={task.prompt}>
         {task.prompt || "—"}
       </p>
+      {task.model === FULL_VIDEO_MODEL && task.detail?.seo && <SeoPackBlock seo={task.detail.seo} />}
       {httpUrls.length > 0 && (
         <div className="space-y-1.5">
           {httpUrls.slice(0, 6).map((u, i) => (
