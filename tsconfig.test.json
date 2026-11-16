@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@libsql/client": ["./node_modules/@libsql/client/lib-esm/web.js"],
+      "@libsql/client/*": ["./node_modules/@libsql/client/lib-esm/*"],
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["scripts/**/*", "src/**/*"]
+}
