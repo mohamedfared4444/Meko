@@ -8,7 +8,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** المزودات المدعومة في مدير المفاتيح */
-const SUPPORTED_PROVIDERS: string[] = ["kie", "cometapi", "cloudflare", "pollinations"];
+const SUPPORTED_PROVIDERS: string[] = ["kie", "cometapi", "cloudflare", "pollinations", "gemini", "huggingface"];
+
+/** تطبيع مفتاح Hugging Face — بادئة hf_ تُوحَّد صغيرة عند التخزين */
+function normalizeHuggingFaceKey(key: string): string {
+  return key.replace(/^hf_/i, "hf_");
+}
 
 /** عرض المفاتيح كاملة الترتيب — مقنّعة دائمًا، لا يُعاد المفتاح الكامل في أي استجابة */
 export async function GET() {
@@ -78,6 +83,27 @@ export async function POST(req: Request) {
       );
     }
     normalizedKey = parts.join(":");
+  }
+
+  // مفتاح Gemini: يُقبل كما هو بلا أي رفض للبادئات — مفاتيح Google AI Studio
+  // (تبدأ AIza) ومفاتيح Google Cloud الجديدة (تبدأ AQ.) كلها صالحة، وأي مفتاح
+  // آخر بطول كافٍ يُقبل أيضًا (Google قد تضيف صيغًا جديدة لاحقًا).
+  if (provider === "gemini" && normalizedKey.length < 8) {
+    return NextResponse.json(
+      { error: "مفتاح Google Gemini مطلوب (8 أحرف على الأقل) — مفاتيح AI Studio بصيغة AIza… ومفاتيح Cloud بصيغة AQ.… كلاهما مقبول." },
+      { status: 400 },
+    );
+  }
+
+  // مفتاح Hugging Face: تُطبَّع البادئة Hf_/HF_ إلى hf_ صغيرة عند التخزين
+  if (provider === "huggingface") {
+    normalizedKey = normalizeHuggingFaceKey(apiKey);
+    if (normalizedKey.length < 8) {
+      return NextResponse.json(
+        { error: "مفتاح Hugging Face مطلوب (8 أحرف على الأقل) — بصيغة hf_… وتُطبَّع البادئة تلقائيًا من Hf_ إلى hf_." },
+        { status: 400 },
+      );
+    }
   }
 
   // Pollinations مجاني بلا مفتاح حقيقي — يقبل أي نص تعريفي مثل «free»

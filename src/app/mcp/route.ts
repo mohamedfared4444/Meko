@@ -7,6 +7,8 @@ import {
   runGeneration,
   runMerge,
 } from "@/lib/coordinator";
+import { runFullVideo } from "@/lib/fullvideo";
+import { generateVoiceover, SUPPORTED_VOICES } from "@/lib/tts";
 import { imageModelEnumValues, videoModelEnumValues } from "@/lib/models";
 import type { MediaType, TaskStatus } from "@/lib/types";
 
@@ -30,7 +32,9 @@ If it returns a task_id with status PROCESSING, call get_task with that task_id 
 generate_image accepts an optional 'provider' argument (cloudflare | pollinations | kie | cometapi); when omitted the server automatically tries active Cloudflare keys first (free daily allowance), then falls back to Pollinations or kie.ai on any error or exhausted limit.
 IMPORTANT: the server automatically switches API keys in strict order on any failure (exhausted balance, invalid key, rate limits) and continues the SAME task under the same task_id — you will never encounter key/balance errors. Never stop or warn the user about keys or balances; just keep polling get_task until the result appears.
 To concatenate several finished clips into one video, call merge_videos with 'urls' (direct links) or 'task_ids' (completed video tasks, in merge order); track it with get_task the same way. Note: the merged file is stored on the merging service for ~24 hours only — tell the user to watch/download it promptly.
-Use list_media to recall previously generated media from the database.`;
+Use list_media to recall previously generated media from the database.
+For a complete automated video from a single topic call create_full_video (topic, duration_seconds, aspect_ratio 9:16|16:9, language en|ar, optional style/voice): it writes the script with Gemini, generates narration audio via free Edge-TTS, generates consistent scene images, and merges everything with Ken Burns motion + crossfades into one MP4 — keep polling get_task until completed; the final response contains the script, all scene images, the audio link and the final video link.
+Use generate_audio for standalone voiceover MP3s (free Edge-TTS neural voices, English + Arabic, optional rate) — it returns the direct audio URL and exact duration in seconds.`;
 
 // ---------------------------------------------------------------------------
 // جسر بث التقدم: progress notifications كل ~3 ثوانٍ عند توفر progressToken
@@ -83,10 +87,10 @@ function buildServer(): McpServer {
         prompt: z.string().min(1).describe("What to draw. Detailed prompts give better results."),
         model: z.enum(imageModels as [string, ...string[]]).default("gpt-image-2-6/flare-text-to-image"),
         provider: z
-          .enum(["auto", "cloudflare", "pollinations", "kie", "kie.ai", "cometapi"])
+          .enum(["auto", "cloudflare", "huggingface", "gemini", "pollinations", "kie", "kie.ai", "cometapi"])
           .default("auto")
           .describe(
-            "Optional provider override. auto = free Cloudflare Workers AI keys first (sequential), then Pollinations, then kie.ai/CometAPI. Use cloudflare for the free daily allowance, pollinations for a fully free no-key generation, 'kie' (also written 'kie.ai') for the paid provider.",
+            "Optional provider override. auto = active Cloudflare keys first (free daily allowance, rotated), then Hugging Face (FLUX.1-schnell), then Google Gemini (Imagen), then Pollinations (fully free, no key), then kie.ai/CometAPI (paid). Automatic failover on any error without disabling valid keys.",
           ),
         aspect_ratio: z
           .enum(["auto", "1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "4:5", "16:9", "9:16", "2:1", "1:2", "21:9", "9:21", "3:1", "1:3"])
@@ -217,9 +221,9 @@ function buildServer(): McpServer {
         task_id: z.string().describe("The task_id returned by generate_image, generate_video or merge_videos."),
       },
     },
-    async (args) => {
+    async (args, extra) => {
       try {
-        const outcome = await refreshTask(args.task_id);
+        const outcome = await refreshTask(args.task_id, makeProgressBridge(extra as HandlerExtra));
         if (outcome.kind === "failed" || outcome.kind === "invalid" || outcome.kind === "error") return errText(outcome.text);
         return okText(outcome.text);
       } catch (e) {
@@ -248,6 +252,73 @@ function buildServer(): McpServer {
           limit: args.limit ?? 10,
         });
         return okText(text);
+      } catch (e) {
+        return errText(`❌ حدث خطأ غير متوقع: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+  );
+
+  // 6) generate_audio — تعليق صوتي MP3 مجاني عبر Edge-TTS
+  server.registerTool(
+    "generate_audio",
+    {
+      description:
+        "Generate a voiceover audio (MP3) from text — free & unlimited via Edge-TTS neural voices. Supports English voices (Andrew, Aria, Guy, Emma, Brian…) and Arabic voices (ar-EG-Shakir, ar-SA-Hamed, ar-EG-Salma) with optional speech rate control. Returns the direct audio URL plus the exact duration in seconds (needed to time scene images for videos).",
+      inputSchema: {
+        text: z.string().min(1).max(6000).describe("The narration text to speak."),
+        voice: z
+          .enum(SUPPORTED_VOICES as [string, ...string[]])
+          .default("en-US-AndrewNeural")
+          .describe("Edge-TTS neural voice. Arabic: ar-EG-ShakirNeural / ar-SA-HamedNeural / ar-EG-SalmaNeural. English: en-US-AndrewNeural (default) / en-US-AriaNeural / en-US-GuyNeural / en-US-EmmaNeural / en-GB-RyanNeural."),
+        rate: z
+          .string()
+          .regex(/^[+-]\d{1,2}%$/)
+          .optional()
+          .describe("Optional speech rate like '+10%' or '-15%' (clamped to ±50%)."),
+      },
+    },
+    async (args) => {
+      try {
+        const out = await generateVoiceover(args.text, { voice: args.voice, rate: args.rate });
+        return okText(
+          `✅ تم توليد الصوت بنجاح\n\nالرابط المباشر: ${out.url}\n\nالمدة بالثواني: ${out.durationSec.toFixed(2)}\nالصوت: ${out.voice}`,
+        );
+      } catch (e) {
+        return errText(`❌ فشل توليد الصوت: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+  );
+
+  // 7) create_full_video — خط الإنتاج الأوتوماتيكي الشامل
+  server.registerTool(
+    "create_full_video",
+    {
+      description:
+        "End-to-end automated video pipeline from ONE topic. The server writes the voiceover script and scene breakdown with Google Gemini (structured JSON), generates the full narration audio via free Edge-TTS (returns exact duration), generates every scene image via the free provider chain (Cloudflare → Hugging Face → Gemini Imagen → Pollinations) with a consistent main character and style, then merges images + audio with cinematic Ken Burns camera motion and smooth crossfades via FFmpeg (meko-manger) into one MP4 sized exactly to the audio duration. Returns script + all scene images + audio link + final video link in ONE response. Takes minutes: you get live progress and a task_id — keep calling get_task every ~10 seconds until completed.",
+      inputSchema: {
+        topic: z.string().min(1).max(400).describe("The video idea or subject, e.g. 'How coffee changed the world' or 'قصة أقدم مكتبة في العالم'."),
+        duration_seconds: z.number().int().min(10).max(180).default(30).describe("Approximate total video length in seconds (10–180)."),
+        aspect_ratio: z.enum(["9:16", "16:9"]).default("9:16").describe("9:16 for Shorts/Reels/TikTok, 16:9 for YouTube."),
+        language: z.enum(["en", "ar"]).default("en").describe("Narration language — English (en) or Arabic (ar)."),
+        style: z.string().max(120).optional().describe("Visual style for all scenes, e.g. 'cinematic', '3d-animation', 'realistic', 'anime'."),
+        voice: z.string().optional().describe("Optional Edge-TTS voice override (e.g. en-US-AriaNeural, ar-EG-ShakirNeural). Defaults: en → en-US-AndrewNeural, ar → ar-EG-ShakirNeural."),
+        wait_seconds: z.number().int().min(0).max(240).default(45).describe("How long to wait in this call before returning a task_id."),
+      },
+    },
+    async (args, extra) => {
+      try {
+        const outcome = await runFullVideo({
+          topic: args.topic,
+          durationSeconds: args.duration_seconds,
+          aspectRatio: args.aspect_ratio,
+          language: args.language,
+          style: args.style,
+          voice: args.voice,
+          waitSeconds: args.wait_seconds ?? 45,
+          onProgress: makeProgressBridge(extra as HandlerExtra),
+        });
+        if (outcome.kind === "failed" || outcome.kind === "invalid") return errText(outcome.text);
+        return okText(outcome.text);
       } catch (e) {
         return errText(`❌ حدث خطأ غير متوقع: ${e instanceof Error ? e.message : String(e)}`);
       }

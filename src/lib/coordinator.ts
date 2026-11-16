@@ -4,6 +4,7 @@ import { mergerBase, mergerConfigured, mergerCreateJob, mergerGetJob, mergerProc
 import { findModel } from "./models";
 import { getAdapter } from "./providers/registry";
 import type { ApiKeyRow, AttemptRecord, MediaType, ModelDef, ProviderId, TaskRow, TaskStatus } from "./types";
+import { formatFullVideoCompleted, FULL_VIDEO_MODEL, refreshFullVideoTask } from "./fullvideo";
 import { getApiKey, disabledKeySummaries, getKeyPool, getTask, insertTask, listRecentTasks, recordKeyUsage, updateTask } from "./turso";
 import type { ProviderCheckResult } from "./providers/types-adapter";
 
@@ -151,6 +152,10 @@ function providerDisplayName(p: TaskRow["provider"]): string {
       return "Cloudflare Workers AI (مجاني)";
     case "pollinations":
       return "Pollinations (مجاني)";
+    case "gemini":
+      return "Google Gemini";
+    case "huggingface":
+      return "Hugging Face";
     case "kie":
       return "kie.ai";
     case "cometapi":
@@ -269,7 +274,7 @@ interface CandidateRun {
  * → kie → cometapi (المجاني أولًا). هذا الترتيب يحترم الأولوية المطلوبة بدل
  * الترتيب العام لوقت الإضافة.
  */
-function orderPoolByProvider(pool: ApiKeyRow[], providers: ProviderId[]): ApiKeyRow[] {
+export function orderPoolByProvider(pool: ApiKeyRow[], providers: ProviderId[]): ApiKeyRow[] {
   const out: ApiKeyRow[] = [];
   for (const p of providers) out.push(...pool.filter((k) => k.provider === p));
   const rest = pool.filter((k) => !providers.includes(k.provider));
@@ -289,7 +294,7 @@ export function normalizeProviderChoice(choice?: string): string {
  * الافتراضي للموديل (المجاني أولًا). يُستخدم في الإنشاء الأول وإعادة المحاولة
  * بعد الانقطاع حتى يبقى تفضيل العميل محفوظًا.
  */
-async function candidatePool(model: ModelDef, preferredProvider?: string): Promise<ApiKeyRow[]> {
+export async function candidatePool(model: ModelDef, preferredProvider?: string): Promise<ApiKeyRow[]> {
   const preferred = normalizeProviderChoice(preferredProvider);
   const wanted =
     preferred && preferred !== "auto" && model.providers.includes(preferred as ProviderId)
@@ -669,15 +674,24 @@ function buildInputFromParams(model: ModelDef, task: TaskRow): Record<string, un
 // ---------------------------------------------------------------------------
 // refreshTask — لأداة get_task: تحديث حي من المزود + إعادة محاولة تلقائية
 
-export async function refreshTask(taskId: string): Promise<RunOutcome> {
+export async function refreshTask(taskId: string, onProgressBridge?: (progress: number, message: string) => Promise<void> | void): Promise<RunOutcome> {
   const task = await getTask(taskId);
   if (!task) {
     return { kind: "invalid", text: `❌ لا توجد مهمة بالمعرّف ${taskId}.` };
   }
-  if (task.status === "completed") return { kind: "completed", taskId, urls: resultUrls(task), text: formatCompleted(task) };
+  if (task.status === "completed") {
+    if (task.model === FULL_VIDEO_MODEL) return { kind: "completed", taskId, urls: resultUrls(task), text: formatFullVideoCompleted(task) };
+    return { kind: "completed", taskId, urls: resultUrls(task), text: formatCompleted(task) };
+  }
   if (task.status === "failed") return { kind: "failed", taskId, text: formatFailed(task) };
 
   if (task.type === "merge") return refreshMergeTask(task);
+
+  // خط إنتاج الفيديو الكامل — آلة حالات مستقلة قابلة للاستكمال
+  if (task.model === FULL_VIDEO_MODEL) {
+    const step = await refreshFullVideoTask(task, onProgressBridge);
+    return step;
+  }
 
   const model = findModel(task.model);
   if (!model) {

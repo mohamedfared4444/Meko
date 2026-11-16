@@ -19,9 +19,11 @@ export const MODELS: ModelDef[] = [
     // Cloudflare Workers AI (نقاط يومية مجانية) → Pollinations (مجاني بالكامل)
     // → kie.ai → CometAPI. يُجرَّب أول مفتاح نشط من كل مزود بالتسلسل مع
     // تبديل تلقائي عند أي خطأ أو نفاد حد.
-    providers: ["cloudflare", "pollinations", "kie", "cometapi"],
+    providers: ["cloudflare", "huggingface", "gemini", "pollinations", "kie", "cometapi"],
     providerModel: {
       cloudflare: envModel("CLOUDFLARE_IMAGE_MODEL", "@cf/black-forest-labs/flux-1-schnell"),
+      huggingface: envModel("HUGGINGFACE_IMAGE_MODEL", "black-forest-labs/FLUX.1-schnell"),
+      gemini: envModel("GEMINI_IMAGE_MODEL", "imagen-4.0-generate-001"),
       pollinations: envModel("POLLINATIONS_IMAGE_MODEL", "flux"),
       kie: envModel("KIE_IMAGE_MODEL", "gpt-image-2-6/flare-text-to-image"),
       cometapi: envModel("COMETAPI_IMAGE_MODEL", "gpt-image-2.6-flare-text-to-image"),
@@ -36,6 +38,8 @@ export const MODELS: ModelDef[] = [
     providers: ["kie", "cometapi"],
     providerModel: {
       cloudflare: envModel("CLOUDFLARE_VIDEO_MODEL", ""),
+      huggingface: envModel("HUGGINGFACE_VIDEO_MODEL", ""),
+      gemini: envModel("GEMINI_VIDEO_MODEL", ""),
       pollinations: envModel("POLLINATIONS_VIDEO_MODEL", ""),
       kie: envModel("KIE_VIDEO_MODEL", "grok-imagine-video-1-5-preview"),
       cometapi: envModel("COMETAPI_VIDEO_MODEL", "grok-imagine-video-1-5-preview"),
@@ -50,6 +54,8 @@ export const MODELS: ModelDef[] = [
     providers: ["kie"],
     providerModel: {
       cloudflare: envModel("CLOUDFLARE_SEGMENT_EDIT_MODEL", ""),
+      huggingface: envModel("HUGGINGFACE_SEGMENT_EDIT_MODEL", ""),
+      gemini: envModel("GEMINI_SEGMENT_EDIT_MODEL", ""),
       pollinations: envModel("POLLINATIONS_SEGMENT_EDIT_MODEL", ""),
       kie: envModel("KIE_SEGMENT_EDIT_MODEL", "grok-imagine-image-2.0/segment-edit"),
       cometapi: envModel("COMETAPI_SEGMENT_EDIT_MODEL", "grok-imagine-image-2.0/segment-edit"),

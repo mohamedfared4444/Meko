@@ -59,8 +59,10 @@ interface TasksResponse {
 // ---------------------------------------------------------------------------
 
 const TOOLS: Array<{ name: string; desc: string }> = [
-  { name: "generate_image", desc: "توليد صورة من وصف نصي — Cloudflare (مجاني) ثم Pollinations (مجاني) ثم kie.ai مع تبديل تلقائي، مع إمكانية تحديد مزود معين" },
+  { name: "generate_image", desc: "توليد صورة من وصف نصي — Cloudflare ثم Hugging Face ثم Gemini ثم Pollinations مع تبديل تلقائي، مع إمكانية تحديد مزود معين" },
   { name: "generate_video", desc: "توليد فيديو بصوت متزامن أصلي عبر grok-imagine-video-1-5-preview" },
+  { name: "generate_audio", desc: "توليد تعليق صوتي MP3 مجانًا عبر Edge-TTS بأصوات إنجليزية وعربية مع تحكم بسرعة النطق" },
+  { name: "create_full_video", desc: "خط إنتاج فيديو أوتوماتيكي كامل: سكربت Gemini + صوت Edge-TTS + صور المشاهد + دمج FFmpeg بحركة كاميرا وانتقالات — فيديو نهائي بأمر واحد" },
   { name: "merge_videos", desc: "دمج عدة مقاطع فيديو في مقطع واحد بالترتيب المطلوب" },
   { name: "get_task", desc: "تتبع أي مهمة بمعرّفها حتى الاكتمال وعرض الروابط" },
   { name: "list_media", desc: "استرجاع أحدث الصور والفيديوهات المخزنة بروابطها" },
@@ -72,6 +74,8 @@ const PROVIDER_LABELS: Record<string, string> = {
   cometapi: "CometAPI",
   cloudflare: "Cloudflare AI",
   pollinations: "Pollinations",
+  gemini: "Google Gemini",
+  huggingface: "Hugging Face",
 };
 
 /** تلميح صيغة المفتاح لكل مزود */
@@ -90,12 +94,28 @@ function providerHint(provider: string) {
       </p>
     );
   }
+  if (provider === "gemini") {
+    return (
+      <p className="text-[11px] leading-relaxed text-white/50">
+        مفتاح Google Gemini — يُقبل كما هو بلا أي رفض للبادئات: مفاتيح Google AI Studio بصيغة <code dir="ltr" className="font-mono text-white/70">AIza…</code> ومفاتيح Google Cloud الجديدة بصيغة <code dir="ltr" className="font-mono text-white/70">AQ.…</code> كلاهما مقبول. يُستخدم لكتابة سكربتات الفيديو (gemini-2.5-flash) وكخط احتياطي لتوليد الصور عبر Imagen.
+      </p>
+    );
+  }
+  if (provider === "huggingface") {
+    return (
+      <p className="text-[11px] leading-relaxed text-white/50">
+        مفتاح Hugging Face بصيغة <code dir="ltr" className="font-mono text-white/70">hf_…</code> — تُطبَّع البادئة تلقائيًا من <code dir="ltr" className="font-mono text-white/70">Hf_</code> إلى <code dir="ltr" className="font-mono text-white/70">hf_</code> عند التخزين والإرسال. يُستخدم لتوليد الصور عبر FLUX.1-schnell (يتطلب رصيد Inference Providers إن كان الحساب مجانيًا — الفشل بـ 402 يبدّل تلقائيًا للمزود التالي دون تعطيل المفتاح).
+      </p>
+    );
+  }
   return null;
 }
 
 function keyInputPlaceholder(provider: string): string {
   if (provider === "cloudflare") return "ACCOUNT_ID:API_TOKEN أو ACCOUNT_ID:EMAIL:GLOBAL_API_KEY";
   if (provider === "pollinations") return "اكتب free (بلا مفتاح حقيقي)";
+  if (provider === "gemini") return "AIza… أو AQ. (كلاهما مقبول كما هو)";
+  if (provider === "huggingface") return "hf_… (تُطبَّع البادئة تلقائيًا)";
   return "ألصق مفتاح API هنا";
 }
 
@@ -369,6 +389,8 @@ export default function Dashboard() {
                     <SelectItem value="kie">kie.ai</SelectItem>
                     <SelectItem value="cometapi">CometAPI</SelectItem>
                     <SelectItem value="cloudflare">Cloudflare AI (مجاني)</SelectItem>
+                    <SelectItem value="huggingface">Hugging Face (FLUX.1-schnell)</SelectItem>
+                    <SelectItem value="gemini">Google Gemini (سكربتات + Imagen)</SelectItem>
                     <SelectItem value="pollinations">Pollinations (مجاني)</SelectItem>
                   </SelectContent>
                 </Select>

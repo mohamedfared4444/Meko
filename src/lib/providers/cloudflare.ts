@@ -1,3 +1,4 @@
+import { uploadViaHosts } from "../upload";
 import { ProviderHttpError, type ProviderAdapter } from "./types-adapter";
 
 /**
@@ -164,196 +165,18 @@ function sniffImageType(bytes: Uint8Array): string | null {
   return null;
 }
 
-/** امتداد ملف مناسب لنوع الصورة */
-function extForType(type: string): string {
-  if (type === "image/jpeg") return "jpg";
-  if (type === "image/webp") return "webp";
-  return "png";
+/** رفع الصورة عبر السلسلة المشتركة الموثوقة (tmpfiles → uguu → litterbox 72h → catbox → 0x0.st → data URL) */
+async function uploadImage(bytes: Uint8Array, contentType: string, remainingMs: () => number): Promise<string> {
+  return uploadViaHosts(bytes, contentType, remainingMs);
 }
 
+/** مهلة إجبارية لنداء التوليد — إجهاض الطلب عند تجاوز الميزانية الزمنية */
 function withTimeout(ms: number): { signal: AbortSignal; done: () => void } {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ms);
   return { signal: ctrl.signal, done: () => clearTimeout(timer) };
 }
 
-/**
- * User-Agent واقعي لطلبات الرفع — بعض المضيفين (catbox/litterbox) يرفضون الترويسة
- * الافتراضية لـ Node/undici القادمة من سيرفرات Vercel برسالة 412 «Invalid uploader»،
- * وترويسة متصفح منطقية تتجاوز ذلك الفلتر البسيط. (0x0.st يستثنى عمدًا — يرفض
- * ترويسات المتصفحات ويطلب ترويسة عميل مخصص.)
- */
-const UPLOAD_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
-
-/** هل النص رابط http/https صالحًا؟ (شرط قبول نتيجة أي مضيف) */
-function isHttpUrl(text: string): boolean {
-  return /^https:\/\/\S+$/.test(text) || /^http:\/\/\S+$/.test(text);
-}
-
-/** الحل الأخير المضمون — الصورة نفسها كـ data URL فلا تضيع أبدًا */
-function toDataUrl(bytes: Uint8Array, contentType: string): string {
-  return `data:${contentType};base64,${Buffer.from(bytes).toString("base64")}`;
-}
-
-/**
- * رفع الصورة إلى مضيف مجاني وإعادة رابط مباشر — سلسلة بالترتيب مع تبديل تلقائي:
- * tmpfiles.org → uguu.se → litterbox (72h) → catbox.moe (دائم) → 0x0.st (طويل)
- * وإذا فشلت كل المضيفين تُعاد الصورة بصيغة data:image/...;base64 — الدالة لا
- * تُلقي خطأ أبدًا بعد نجاح التوليد، فالمفتاح الصالح لا يُعطَّل بسبب رفع خارجي.
- * مهلة كل مضيف تنقص من الميزانية المتبقية للعملية المتزامنة حتى لا نتجاوز
- * حد دالة Vercel وتُقتل قبل تحديث المهمة في قاعدة البيانات.
- */
-async function uploadImage(bytes: Uint8Array, contentType: string, remainingMs: () => number): Promise<string> {
-  const ext = extForType(contentType);
-  const filename = `meko-${Date.now()}.${ext}`;
-
-  // 1) tmpfiles.org — بلا حظر لـ IP المراكز البيانات (أولوية أولى مثبتة بالاختبار الحي)
-  {
-    const budget = Math.min(UPLOAD_TIMEOUT_MS, remainingMs());
-    if (budget >= MIN_USEFUL_TIMEOUT_MS) {
-      const { signal, done } = withTimeout(budget);
-      try {
-        const form = new FormData();
-        form.append("file", new Blob([bytes as BlobPart], { type: contentType }), filename);
-        const res = await fetch("https://tmpfiles.org/api/v1/upload", { method: "POST", body: form, signal, headers: { "User-Agent": UPLOAD_UA } });
-        const text = (await res.text()).trim();
-        if (res.ok) {
-          const parsed = JSON.parse(text) as { status?: string; data?: { url?: string } };
-          const plain = parsed.data?.url ?? "";
-          if (parsed.status === "success" && isHttpUrl(plain)) {
-            // تحويل الرابط الناتج إلى رابط مباشر: نحاول أولًا استخراج الرابط
-            // الموقّع من صفحة الملف (الشكل https://tmpfiles.org/dl/<ts>.<hash>/…
-            // ويقدّم الصورة الخام فعليًا)، وإلا نطبّق القاعدة الأساسية بإضافة
-            // /dl/ بعد اسم النطاق مباشرة.
-            try {
-              const pageCtrl = new AbortController();
-              const pageTimer = setTimeout(() => pageCtrl.abort(), Math.min(5_000, remainingMs()));
-              try {
-                const page = await fetch(plain, { signal: pageCtrl.signal, headers: { "User-Agent": UPLOAD_UA } });
-                const html = await page.text();
-                const signed = html.match(/https:\/\/tmpfiles\.org\/dl\/\d+\.[0-9a-f]+\/\S+/)?.[0];
-                if (signed) return signed.replace(/["'<>].*$/, "");
-              } finally {
-                clearTimeout(pageTimer);
-              }
-            } catch {
-              /* استخراج الصفحة فشل — نرجع لقاعدة /dl/ الأساسية */
-            }
-            const dl = plain.replace("https://tmpfiles.org/", "https://tmpfiles.org/dl/");
-            if (isHttpUrl(dl)) return dl;
-          }
-        }
-      } catch {
-        /* ننتقل للمضيف التالي */
-      } finally {
-        done();
-      }
-    }
-  }
-
-  // 2) uguu.se — رفع JSON سريع (files[])
-  {
-    const budget = Math.min(UPLOAD_TIMEOUT_MS, remainingMs());
-    if (budget >= MIN_USEFUL_TIMEOUT_MS) {
-      const { signal, done } = withTimeout(budget);
-      try {
-        const form = new FormData();
-        form.append("files[]", new Blob([bytes as BlobPart], { type: contentType }), filename);
-        const res = await fetch("https://uguu.se/upload", { method: "POST", body: form, signal, headers: { "User-Agent": UPLOAD_UA } });
-        const text = (await res.text()).trim();
-        if (res.ok) {
-          const parsed = JSON.parse(text) as { success?: boolean; files?: Array<{ url?: string }> };
-          const url = parsed.files?.[0]?.url ?? "";
-          if (parsed.success === true && isHttpUrl(url)) return url;
-        }
-      } catch {
-        /* ننتقل للمضيف التالي */
-      } finally {
-        done();
-      }
-    }
-  }
-
-  // 3) litterbox — مؤقت 72 ساعة (reqtype=fileupload + time=72h كما هو مطلوب)
-  {
-    const budget = Math.min(UPLOAD_TIMEOUT_MS, remainingMs());
-    if (budget >= MIN_USEFUL_TIMEOUT_MS) {
-      const { signal, done } = withTimeout(budget);
-      try {
-        const form = new FormData();
-        form.append("reqtype", "fileupload");
-        form.append("time", "72h");
-        form.append("fileToUpload", new Blob([bytes as BlobPart], { type: contentType }), filename);
-        const res = await fetch("https://litterbox.catbox.moe/resources/internals/api.php", {
-          method: "POST",
-          body: form,
-          signal,
-          headers: { "User-Agent": UPLOAD_UA },
-        });
-        const text = (await res.text()).trim();
-        if (res.ok && isHttpUrl(text)) return text;
-      } catch {
-        /* ننتقل للمضيف التالي */
-      } finally {
-        done();
-      }
-    }
-  }
-
-  // 4) catbox.moe — روابط دائمة
-  {
-    const budget = Math.min(UPLOAD_TIMEOUT_MS, remainingMs());
-    if (budget >= MIN_USEFUL_TIMEOUT_MS) {
-      const { signal, done } = withTimeout(budget);
-      try {
-        const form = new FormData();
-        form.append("reqtype", "fileupload");
-        form.append("fileToUpload", new Blob([bytes as BlobPart], { type: contentType }), filename);
-        const res = await fetch("https://catbox.moe/user/api.php", {
-          method: "POST",
-          body: form,
-          signal,
-          headers: { "User-Agent": UPLOAD_UA },
-        });
-        const text = (await res.text()).trim();
-        if (res.ok && isHttpUrl(text)) return text;
-      } catch {
-        /* ننتقل للمضيف التالي */
-      } finally {
-        done();
-      }
-    }
-  }
-
-  // 5) 0x0.st — احتفظ طويل (يطلب ترويسة عميل مخصص ولا يقبل ترويسات المتصفحات)
-  {
-    const budget = Math.min(UPLOAD_TIMEOUT_MS, remainingMs());
-    if (budget >= MIN_USEFUL_TIMEOUT_MS) {
-      const { signal, done } = withTimeout(budget);
-      try {
-        const form = new FormData();
-        form.append("file", new Blob([bytes as BlobPart], { type: contentType }), filename);
-        const res = await fetch("https://0x0.st", {
-          method: "POST",
-          body: form,
-          signal,
-          headers: { "User-Agent": "Meko-MCP/1.0 (media generator)" },
-        });
-        const text = (await res.text()).trim();
-        if (res.ok && isHttpUrl(text)) return text;
-      } catch {
-        /* ننتقل للمضيف التالي */
-      } finally {
-        done();
-      }
-    }
-  }
-
-  // 6) الحل الأخير المضمون — كل مواقع الرفع الخارجية فشلت → الصورة نفسها
-  //    كـ data URL (لحظي، بلا شبكة): الصورة لا تضيع أبدًا ولا تُعطَّل مفتاح
-  //    صالح بسبب فشل رفع طرف ثالث.
-  return toDataUrl(bytes, contentType);
-}
 
 export const cloudflareAdapter: ProviderAdapter = {
   // توليد صورة متزامن — يعيد رابطًا مباشرًا بعد الرفع

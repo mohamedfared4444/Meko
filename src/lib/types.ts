@@ -2,7 +2,7 @@
  * أنواع مشتركة للمشروع كله — MCP Media Generator
  */
 
-export type ProviderId = "kie" | "cometapi" | "cloudflare" | "pollinations";
+export type ProviderId = "kie" | "cometapi" | "cloudflare" | "pollinations" | "gemini" | "huggingface";
 export type TaskProvider = ProviderId | "merger";
 export type MediaType = "image" | "video" | "merge";
 export type TaskStatus = "pending" | "processing" | "completed" | "failed";

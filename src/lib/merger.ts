@@ -100,6 +100,54 @@ export async function mergerCreateJob(videos: string[]): Promise<MergerJobCreate
   };
 }
 
+/** نتيجة تحريك الصور — فيديو MP4 جاهز */
+export interface MergerVideocutResult {
+  jobId: string;
+  videoUrl: string;
+  downloadUrl: string;
+  duration: number;
+  resolution: string;
+  size: number;
+  scenes: number;
+  hadAudio: boolean;
+}
+
+/**
+ * POST /api/videocut — تحريك الصور إلى فيديو (Ken Burns + Crossfade + صوت).
+ * النداء متزامن: الخدمة تُعيد الفيديو النهائي في نفس الاستجابة (حتى 60 ثانية).
+ * أي خطأ معلن من الخدمة = MergerError declared=true (فشل نهائي بلا إعادة).
+ */
+export async function mergerVideocut(spec: {
+  images: string[];
+  audio_url?: string | null;
+  aspect_ratio?: string;
+  transition?: number;
+  resolution?: string;
+  total_duration?: number;
+}): Promise<MergerVideocutResult> {
+  const { status, body } = await mergerFetch(
+    "/api/videocut",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec) },
+    58_000,
+  );
+  if (status < 200 || status >= 300) {
+    const err = typeof body.error === "string" ? body.error : `HTTP ${status} من خدمة تحريك الصور`;
+    throw new MergerError(err, status, true);
+  }
+  const videoUrl = typeof body.video_url === "string" ? body.video_url : "";
+  if (!videoUrl) throw new MergerError("استجابة تحريك الصور بلا رابط فيديو", 502, true);
+  return {
+    jobId: typeof body.jobId === "string" ? body.jobId : "",
+    videoUrl,
+    downloadUrl: typeof body.download_url === "string" ? body.download_url : videoUrl,
+    duration: typeof body.duration === "number" ? body.duration : 0,
+    resolution: typeof body.resolution === "string" ? body.resolution : "",
+    size: typeof body.size === "number" ? body.size : 0,
+    scenes: typeof body.scenes === "number" ? body.scenes : 0,
+    hadAudio: body.had_audio === true,
+  };
+}
+
 /**
  * تحليل الحالة دفاعيًا (قسم 7.2):
  * - أكمل: done|completed|complete|success|succeeded|finished
