@@ -230,7 +230,9 @@ async function renderVideo({ html, width, height, fps, duration, wordTimings, au
       args.push("-f", "lavfi", "-t", duration.toFixed(3), "-i", "anullsrc=channel_layout=stereo:sample_rate=44100");
     }
     args.push("-map", "0:v:0", "-map", "1:a:0");
-    args.push("-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p", "-r", String(fps));
+    // veryfast: ذاكرة أقل بكثير من medium بنفس الجودة البصرية تقريبًا عند CRF 18
+    // (قابل للضبط بـ FFMPEG_X264_PRESET للبيئات الغنية بالذاكرة)
+    args.push("-c:v", "libx264", "-crf", "18", "-preset", process.env.FFMPEG_X264_PRESET || "veryfast", "-pix_fmt", "yuv420p", "-r", String(fps));
     args.push("-c:a", "aac", "-b:a", "192k", "-ar", "44100");
     args.push("-t", duration.toFixed(3), "-movflags", "+faststart");
     args.push(outputPath);
@@ -297,6 +299,8 @@ async function launchBrowser(width, height) {
       "--hide-scrollbars",
       "--font-render-hinting=none",
       "--disable-gpu-vsync",
+      // تقليل الذاكرة في البيئات المحدودة — عملية عرض واحدة تكفي الالتقاط
+      "--renderer-process-limit=1",
     ],
     protocolTimeout: 120_000,
   });
@@ -445,7 +449,9 @@ async function finalizeToMerger(meta) {
     return null;
   }
   const body = JSON.parse(text || "{}");
-  return body.video_url ? body : null;
+  // الخدمة تعيد snake_case (video_url) — نطبّعه إلى videoUrl للناشر
+  if (!body.video_url) return null;
+  return { ok: true, videoUrl: body.video_url, downloadUrl: body.download_url, host: body.host };
 }
 
 /** رفع الناتج إلى إصدار GitHub دائم (احتياط عند فشل meko-manger) */
