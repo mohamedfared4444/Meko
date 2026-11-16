@@ -37,7 +37,11 @@ const fullSchema = z.object({
 const codeSchema = z.object({
   kind: z.literal("code"),
   title: z.string().min(1, "عنوان الفيديو (title) مطلوب.").max(200),
-  html_code: z.string().min(100, "كود HTML قصير جدًا — الحد الأدنى 100 حرفًا.").max(300_000),
+  // حد كبير يتسع لأكواد HTML/SVG كاملة من النماذج (150 ألف حرف ≈ كود مشهد غني)
+  html_code: z
+    .string()
+    .min(100, "كود HTML قصير جدًا — الحد الأدنى 100 حرفًا.")
+    .max(150_000, "كود HTML طويل جدًا — الحد الأقصى 150000 حرفًا. قسّم المشهد أو اختصر التعليقات."),
   script: z.string().max(6000).optional(),
   voice: z.string().max(100).optional(),
   aspect_ratio: z.enum(["9:16", "16:9", "1:1"]).optional(),
@@ -89,13 +93,19 @@ export async function POST(req: Request) {
     const outcome = await runCodeVideo({
       title: body.title,
       htmlCode: body.html_code,
-      script: body.script?.trim() || undefined,
-      voice: body.voice,
+      // الحقول الاختيارية الفارغة تصبح undefined قبل التشغيل (لا نص صوتي فارغ)
+      script: body.script && body.script.trim().length > 0 ? body.script.trim() : undefined,
+      voice: body.voice && body.voice.trim().length > 0 ? body.voice.trim() : undefined,
       aspectRatio: body.aspect_ratio,
       durationSeconds: body.duration_seconds,
       waitSeconds: LAUNCH_WAIT_SECONDS,
     });
-    if (outcome.kind === "invalid") return NextResponse.json({ error: outcome.text }, { status: 400 });
+    if (outcome.kind === "invalid") {
+      return NextResponse.json(
+        { error: outcome.text, ...(outcome.taskId ? { task_id: outcome.taskId } : {}) },
+        { status: 400 },
+      );
+    }
     if (outcome.kind === "failed") return NextResponse.json({ error: outcome.text, task_id: outcome.taskId }, { status: 500 });
     return NextResponse.json({ ok: true, kind: "code", task_id: outcome.taskId, status: outcome.kind });
   } catch (e) {

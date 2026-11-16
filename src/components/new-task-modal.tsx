@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -34,7 +34,8 @@ const VOICES: Array<{ id: string; label: string }> = [
 ];
 
 const HTML_CODE_MIN = 100;
-const HTML_CODE_MAX = 300_000;
+/** حد كود المشهد — يتسع لأكواد HTML/SVG كاملة من النماذج ويحمي صفوف Turso */
+const HTML_CODE_MAX = 150_000;
 const SCENES_MAX = 12;
 
 /** قالب انطلاقة جاهز — يعرّف window.renderAtTime ليُعدّ أو يُستبدل بكود النموذج */
@@ -314,6 +315,9 @@ export default function NewTaskModal({
 }) {
   const [tab, setTab] = useState<"full" | "code">("full");
   const [submitting, setSubmitting] = useState(false);
+  /** رسالة خطأ بارزة ثابتة داخل النافذة — لا تختفي حتى يصلح المستخدم الحقل */
+  const [error, setError] = useState<string | null>(null);
+  const errorRef = useRef<HTMLDivElement | null>(null);
   const [full, setFull] = useState<FullFormState>({
     topic: "",
     customScript: "",
@@ -332,8 +336,30 @@ export default function NewTaskModal({
     voice: "en-US-AndrewNeural",
   });
 
-  const updateFull = (patch: Partial<FullFormState>) => setFull((s) => ({ ...s, ...patch }));
-  const updateCode = (patch: Partial<CodeFormState>) => setCode((s) => ({ ...s, ...patch }));
+  const updateFull = (patch: Partial<FullFormState>) => {
+    setError(null);
+    setFull((s) => ({ ...s, ...patch }));
+  };
+  const updateCode = (patch: Partial<CodeFormState>) => {
+    setError(null);
+    setCode((s) => ({ ...s, ...patch }));
+  };
+
+  /** خطأ بارز داخل النافذة أعلى زر التشغيل (مرئي على الهاتف ولا يختفي تلقائيًا) */
+  const showError = useCallback((msg: string) => {
+    setError(msg);
+  }, []);
+
+  useEffect(() => {
+    if (error && errorRef.current) {
+      errorRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [error]);
+
+  // إعادة النافذة نظيفة عند كل فتح جديد
+  useEffect(() => {
+    if (!open) setError(null);
+  }, [open]);
 
   const submit = async () => {
     let payload: Record<string, unknown> | null = null;
@@ -341,17 +367,18 @@ export default function NewTaskModal({
     if (tab === "full") {
       const topic = full.topic.trim();
       if (!topic) {
-        toast.error("اكتب موضوع الفيديو أولًا");
+        showError("اكتب موضوع الفيديو أولًا.");
         return;
       }
       const scenes = full.scenesText.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
       if (scenes.length > SCENES_MAX) {
-        toast.error(`الحد الأقصى ${SCENES_MAX} مشهدًا — وصل ${scenes.length}.`);
+        showError(`الحد الأقصى ${SCENES_MAX} مشهدًا — وصل ${scenes.length}.`);
         return;
       }
       payload = {
         kind: "full",
         topic,
+        // الحقول الاختيارية الفارغة تُحذف تمامًا (تصبح undefined في الخادم)
         ...(full.customScript.trim() ? { custom_script: full.customScript.trim() } : {}),
         ...(scenes.length > 0 ? { scenes } : {}),
         duration_seconds: clampInt(full.duration, 10, 180, 30),
@@ -363,31 +390,32 @@ export default function NewTaskModal({
     } else {
       const title = code.title.trim();
       if (!title) {
-        toast.error("اكتب عنوان الفيديو أولًا");
+        showError("اكتب عنوان الفيديو أولًا.");
         return;
       }
       const html = code.htmlCode.trim();
       if (html.length < HTML_CODE_MIN) {
-        toast.error(`كود الأنيميشن قصير جدًا (${html.length} حرفًا) — الصق صفحة HTML كاملة أو أدرج القالب الجاهز.`);
+        showError(`كود الأنيميشن قصير جدًا (${html.length} حرفًا) — الصق صفحة HTML كاملة أو أدرج القالب الجاهز.`);
         return;
       }
       if (html.length > HTML_CODE_MAX) {
-        toast.error(`كود الأنيميشن طويل جدًا (${html.length} حرفًا) — الحد ${HTML_CODE_MAX.toLocaleString("en")}.`);
+        showError(`كود الأنيميشن طويل جدًا (${html.length.toLocaleString("en")} حرفًا) — الحد ${HTML_CODE_MAX.toLocaleString("en")} حرفًا.`);
         return;
       }
       if (!html.includes("renderAtTime")) {
-        toast.error("الكود لا يعرّف window.renderAtTime(t, duration, wordTimings) — أضفها أو أدرج القالب الجاهز.");
+        showError("الكود لا يعرّف window.renderAtTime(t, duration, wordTimings) — أضفها داخل <script> أو أدرج القالب الجاهز.");
         return;
       }
       const script = code.script.trim();
       if (script.length > 6000) {
-        toast.error("نص التعليق الصوتي طويل جدًا — الحد 6000 حرفًا.");
+        showError("نص التعليق الصوتي طويل جدًا — الحد 6000 حرفًا.");
         return;
       }
       payload = {
         kind: "code",
         title,
         html_code: html,
+        // النص الفارغ يُحذف تمامًا → undefined في الخادم (فيديو صامد على المدة الافتراضية)
         ...(script ? { script } : {}),
         aspect_ratio: code.aspectRatio,
         voice: code.voice,
@@ -395,6 +423,7 @@ export default function NewTaskModal({
     }
 
     setSubmitting(true);
+    setError(null);
     try {
       const r = await fetch("/api/tasks/create", {
         method: "POST",
@@ -403,13 +432,14 @@ export default function NewTaskModal({
       });
       const j = (await r.json()) as { ok?: boolean; task_id?: string; error?: string };
       if (!r.ok || !j.ok) {
-        toast.error(j.error ?? "فشل إطلاق المهمة — حاول مرة أخرى.");
+        // رسالة الخطأ من التحقق أو الخادم — بارزة وثابتة داخل النافذة نفسها
+        showError(j.error ?? "فشل إطلاق المهمة — حاول مرة أخرى.");
         return;
       }
       toast.success("تم إطلاق المهمة — تتابع تقدمها الآن في شاشة العمل المباشرة");
       onCreated(j.task_id ?? "", tab);
     } catch {
-      toast.error("تعذر الاتصال بالخادم");
+      showError("تعذر الاتصال بالخادم — تحقق من الشبكة ثم أعد المحاولة.");
     } finally {
       setSubmitting(false);
     }
@@ -425,7 +455,10 @@ export default function NewTaskModal({
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs value={tab} onValueChange={(v) => setTab(v as "full" | "code")} className="gap-3">
+        <Tabs value={tab} onValueChange={(v) => {
+          setError(null);
+          setTab(v as "full" | "code");
+        }} className="gap-3">
           <TabsList className="grid grid-cols-2 w-full h-9 bg-white/5 border border-white/10">
             <TabsTrigger value="full" className="text-[12px] font-semibold data-[state=active]:bg-primary data-[state=active]:text-white">
               فيديو بالصور
@@ -442,6 +475,21 @@ export default function NewTaskModal({
             <CodeVideoForm form={code} update={updateCode} />
           </TabsContent>
         </Tabs>
+
+        {error && (
+          <div
+            ref={errorRef}
+            role="alert"
+            className="flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3.5 py-3 text-[12px] font-semibold leading-relaxed text-red-300"
+          >
+            <svg className="mt-0.5 shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <path d="M12 9v4" />
+              <path d="M12 17h.01" />
+            </svg>
+            <span className="whitespace-pre-line">{error}</span>
+          </div>
+        )}
 
         <div className="flex items-center gap-2 pt-1">
           <Button

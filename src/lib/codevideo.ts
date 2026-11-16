@@ -298,7 +298,7 @@ export function formatCodeVideoCompleted(task: TaskRow): string {
   return lines.filter((l) => l !== "").join("\n");
 }
 
-/** التشغيل الأول — أداة render_code_video */
+/** التشغيل الأول — أداة render_code_video ونقطة /api/tasks/create */
 export async function runCodeVideo(opts: CodeVideoInput & {
   waitSeconds: number;
   onProgress?: (progress: number, message: string) => Promise<void> | void;
@@ -306,24 +306,41 @@ export async function runCodeVideo(opts: CodeVideoInput & {
   | { kind: "completed"; taskId: string; urls: string[]; text: string }
   | { kind: "processing"; taskId: string; progress: number; text: string }
   | { kind: "failed"; taskId: string; text: string }
-  | { kind: "invalid"; text: string }
+  | { kind: "invalid"; taskId?: string; text: string }
 > {
-  if (!mergerConfigured()) {
-    return { kind: "invalid", text: "❌ خدمة الدمج meko-manger غير مهيأة على هذا الخادم (MERGER_API_BASE غير مضبوط) — الرندر البرمجي يحتاجها لتحويل المشهد إلى فيديو." };
-  }
   const built = buildCodeVideoParams(opts);
-  if (!built.ok) return { kind: "invalid", text: built.error };
-  const params = built.params;
-
+  const rawTitle = (opts.title ?? "").trim();
   const taskId = randomUUID();
+
+  // المهمة تُسجَّل في Turso فور بدء التشغيل — قبل أي فحص شبكي أو استدعاء خدمة
+  // الدمج أو توليد الصوت — حتى تظهر فورًا في شاشة العمل المباشر، ولو فشل
+  // الرندر لاحقًا فسبب الفشل مرئي على المهمة نفسها بدل اختفاء الطلب بلا أثر.
   await insertTask({
     id: taskId,
     model: CODE_VIDEO_MODEL,
     type: "video" as MediaType,
-    prompt: `فيديو برمجي: ${params.title}`.slice(0, 2000),
-    paramsJson: JSON.stringify(params),
+    prompt: `فيديو برمجي: ${rawTitle.slice(0, 1900) || "بلا عنوان"}`.slice(0, 2000),
+    // فشل التحقق: لا نخزّن الكود الأصلي (قد يكون ضخمًا ويُفشل الإدراج) — الحالة فقط
+    paramsJson: JSON.stringify(
+      built.ok
+        ? built.params
+        : { title: rawTitle.slice(0, TITLE_MAX), htmlCode: "", failCount: 1, lastError: built.error.slice(0, 400) } satisfies Partial<CodeVideoParams>,
+    ),
     status: "processing",
   });
+
+  if (!built.ok) {
+    const err = built.error.slice(0, 490);
+    await updateTask(taskId, { status: "failed", error_message: err });
+    return { kind: "invalid", taskId, text: built.error };
+  }
+  const params = built.params;
+
+  if (!mergerConfigured()) {
+    const err = "❌ خدمة الدمج meko-manger غير مهيأة على هذا الخادم (MERGER_API_BASE غير مضبوط) — الرندر البرمجي يحتاجها لتحويل المشهد إلى فيديو.";
+    await updateTask(taskId, { status: "failed", error_message: err.slice(0, 490) });
+    return { kind: "invalid", taskId, text: err };
+  }
 
   const waitSec = Math.max(0, Math.min(opts.waitSeconds, PIPELINE_BUDGET_MS / 1000));
   const outcome = await advanceCodeVideo(taskId, params, Math.min(PIPELINE_BUDGET_MS, waitSec * 1000 || PIPELINE_BUDGET_MS), opts.onProgress ?? (() => {}));
