@@ -53,8 +53,22 @@ async function ensureBinary(binPath) {
   return ensureExecutable(binPath);
 }
 
-/** تنزيل ملف إلى مسار — fetch مع حد حجم صريح */
-async function downloadTo(url, destPath, maxBytes) {
+/** أنواع MIME المعروفة للمصادر — يُستخدم لرفض صفحات HTML المزيفة */
+const IMAGE_MAGICS = [
+  { m: Buffer.from([0xff, 0xd8, 0xff]), label: "jpeg" },
+  { m: Buffer.from([0x89, 0x50, 0x4e, 0x47]), label: "png" },
+  { m: Buffer.from("GIF8"), label: "gif" },
+  { m: Buffer.from("RIFF"), label: "webp/gif" },
+  { m: Buffer.from("BM"), label: "bmp" },
+];
+
+/** تنزيل ملف إلى مسار — fetch مع حد حجم صريح وفحص محتوى.
+ *  kind اختياري: "image" يفرض أن المحتوى صورة حقيقية (magic bytes)،
+ *  و"audio" يفرض صوتًا — بعض مضيفي الرفع يعيدون صفحة HTML عند تغيّر
+ *  سلوكهم أو انتهاء صلاحية الرابط الموقّع، وحفظها كملف يفشل ffmpeg
+ *  لاحقًا برسالة غامضة («Could not open encoder») فنرفضها هنا فورًا
+ *  برسالة عربية واضحة تسمح بالتشخيص الفوري. */
+async function downloadTo(url, destPath, maxBytes, kind) {
   const res = await fetch(url, { redirect: "follow" });
   if (!res.ok) throw new Error(`تعذر تنزيل المورد (${res.status}): ${url.slice(0, 120)}`);
   const buf = Buffer.from(await res.arrayBuffer());
@@ -63,6 +77,15 @@ async function downloadTo(url, destPath, maxBytes) {
   }
   if (buf.length < 128) {
     throw new Error(`المورد غير صالح أو فارغ (${url.slice(0, 120)})`);
+  }
+  const head = buf.subarray(0, 512).toString("latin1").trim().toLowerCase();
+  const ct = (res.headers.get("content-type") || "").toLowerCase();
+  const looksHtml = head.startsWith("<!doctype") || head.startsWith("<html") || ct.includes("text/html");
+  if (looksHtml) {
+    throw new Error(`الرابط يعيد صفحة HTML بدل الملف الخام (content-type: ${ct || "بلا نوع"}) — انتهت صلاحية الرابط الموقّع أو غيّر المضيف سلوكه: ${url.slice(0, 120)}`);
+  }
+  if (kind === "image" && !IMAGE_MAGICS.some((x) => buf.subarray(0, x.m.length).equals(x.m))) {
+    throw new Error(`المحتوى المستلم ليس صورة معروفة (content-type: ${ct || "بلا نوع"}) من ${url.slice(0, 120)}`);
   }
   await fs.promises.writeFile(destPath, buf);
   return buf.length;
@@ -134,7 +157,7 @@ async function runVideocutJob(jobId, spec) {
         if (buf.length < 128) throw new Error(`صورة data: تالفة عند الفهرس ${i}`);
         await fs.promises.writeFile(dest, buf);
       } else {
-        await downloadTo(images[i], dest, 15 * 1048576);
+        await downloadTo(images[i], dest, 15 * 1048576, "image");
       }
       imgPaths.push(dest);
       await updateJob(jobId, { progress: Math.round(2 + (18 * (i + 1)) / images.length) });
@@ -145,7 +168,7 @@ async function runVideocutJob(jobId, spec) {
     let audioDur = 0;
     if (spec.audio_url && /^https?:\/\/.+/i.test(String(spec.audio_url))) {
       audioPath = path.join(tmpDir, "audio.bin");
-      await downloadTo(spec.audio_url, audioPath, 40 * 1048576);
+      await downloadTo(spec.audio_url, audioPath, 40 * 1048576, "audio");
       const probe = await ensureBinary(require("ffprobe-static").path);
       audioDur = await audioDurationSec(probe, audioPath);
     } else if (/^data:audio\//i.test(String(spec.audio_url || ""))) {

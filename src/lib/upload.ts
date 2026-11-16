@@ -73,7 +73,13 @@ export async function uploadViaHosts(
   const remaining = remainingMs ?? (() => Number.MAX_SAFE_INTEGER);
   const filename = `meko-${Date.now()}.${extForMime(mime)}`;
 
-  // 1) tmpfiles.org — بلا حظر لـ IP المراكز البيانات (أولوية أولى مثبتة بالاختبار الحي)
+  // 1) tmpfiles.org — الأولوية الأولى (بلا حظر لـ IP المراكز البيانات، مثبت حيًا).
+  //    سلوك tmpfiles الجديد (مثبت 2026-11): رابط /dl/ المُصنَّع يدويًا يعيد
+  //    توجيهًا 302 إلى صفحة HTML بدل الملف الخام — فأي مستهلك (ffmpeg في
+  //    meko-manger، عميل MCP، متصفح) يتلقى HTML لا صورة. لذا نجاح tmpfiles
+  //    يتطلب استخراج الرابط الموقّع من صفحة الملف + تحققًا حيًا أنه يقدّم
+  //    الملف الخام فعلًا؛ وإلا نعتبر المضيف فاشلًا وننتقل للتالي — لا نُرجع
+  //    أبدًا رابطًا يقدّم HTML بدل الملف.
   {
     const budget = Math.min(UPLOAD_TIMEOUT_MS, remaining());
     if (budget >= MIN_USEFUL_TIMEOUT_MS) {
@@ -87,10 +93,8 @@ export async function uploadViaHosts(
           const parsed = JSON.parse(text) as { status?: string; data?: { url?: string } };
           const plain = parsed.data?.url ?? "";
           if (parsed.status === "success" && isHttpUrl(plain)) {
-            // تحويل الرابط الناتج إلى رابط مباشر: نحاول أولًا استخراج الرابط
-            // الموقّع من صفحة الملف (الشكل https://tmpfiles.org/dl/<ts>.<hash>/…
-            // ويقدّم الملف الخام فعليًا)، وإلا نطبّق القاعدة الأساسية بإضافة
-            // /dl/ بعد اسم النطاق مباشرة.
+            // استخراج الرابط الموقّع من صفحة الملف
+            // (الشكل https://tmpfiles.org/dl/<ts>.<hash>/… ويقدّم الملف الخام)
             try {
               const pageCtrl = new AbortController();
               const pageTimer = setTimeout(() => pageCtrl.abort(), Math.min(5_000, remaining()));
@@ -98,15 +102,29 @@ export async function uploadViaHosts(
                 const page = await fetch(plain, { signal: pageCtrl.signal, headers: { "User-Agent": UPLOAD_UA } });
                 const html = await page.text();
                 const signed = html.match(/https:\/\/tmpfiles\.org\/dl\/\d+\.[0-9a-f]+\/\S+/)?.[0];
-                if (signed) return signed.replace(/["'<>].*$/, "");
+                if (signed) {
+                  const direct = signed.replace(/["'<>].*$/, "");
+                  // تحقق حي: الرابط الموقّع يجب أن يقدّم الملف الخام
+                  // (image/* أو audio/* أو octet-stream) — أي شيء آخر
+                  // (صفحة HTML، خطأ) يعني تغيّر السلوك → المضيف التالي
+                  const probeCtrl = new AbortController();
+                  const probeTimer = setTimeout(() => probeCtrl.abort(), Math.min(6_000, remaining()));
+                  try {
+                    const probe = await fetch(direct, { method: "GET", signal: probeCtrl.signal, headers: { "User-Agent": UPLOAD_UA } });
+                    const ct = (probe.headers.get("content-type") || "").toLowerCase();
+                    if (probe.ok && (ct.startsWith("image/") || ct.startsWith("audio/") || ct === "application/octet-stream")) {
+                      return direct;
+                    }
+                  } finally {
+                    clearTimeout(probeTimer);
+                  }
+                }
               } finally {
                 clearTimeout(pageTimer);
               }
             } catch {
-              /* استخراج الصفحة فشل — نرجع لقاعدة /dl/ الأساسية */
+              /* استخراج/تحقق الصفحة فشل — ننتقل للمضيف التالي */
             }
-            const dl = plain.replace("https://tmpfiles.org/", "https://tmpfiles.org/dl/");
-            if (isHttpUrl(dl)) return dl;
           }
         }
       } catch {
