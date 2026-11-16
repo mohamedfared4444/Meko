@@ -109,6 +109,12 @@ async function handleChunk(db, req, res, jobId) {
   if (!buf || buf.length === 0) {
     return send(res, 400, { error: "جسم الطلب فارغ — أرسل الأجزاء الثنائية كما هي (application/octet-stream)" });
   }
+  // الجزء 0 يمسح أي أجزاء قديمة لنفس المعرّف (إعادة رندر بنفس job_id قد تترك
+  // ذيلاً قديمًا أطول من الناتج الجديد فيفسد الملف المُخدَم) — الرفع تسلسلي
+  // من العامل فالجزء 0 يصل أولًا دائمًا
+  if (chunk === 0) {
+    await db.execute({ sql: `DELETE FROM output_chunks WHERE job_id = ?`, args: [jobId] });
+  }
   await db.execute({
     sql: `INSERT OR REPLACE INTO output_chunks (job_id, chunk_seq, data) VALUES (?,?,?)`,
     args: [jobId, chunk, buf],
