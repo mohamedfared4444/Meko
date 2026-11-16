@@ -75,6 +75,19 @@ for (const [family, file] of Object.entries(FONT_FILES)) {
   }
 }
 
+// ‌Vercel NFT tracing: أرشيفات bin في @sparticuz/chromium تُكتشف ديناميكيًا
+// (readdirSync) فلا يتبعها مُتتبع NFT وتبقى خارج حزمة الدالة — وبغياب أرشيف
+// المكتبات يفشل Chromium بـ «libnss3.so cannot open». قراءة صريحة بأسماء
+// ثابتة تجبر NFT على تضمين كل الأرشيفات في الحزمة.
+const CHROMIUM_BIN_DIR = path.join(__dirname, "..", "node_modules", "@sparticuz/chromium", "bin");
+for (const binFile of ["al2.tar.br", "al2023.tar.br", "chromium.br", "fonts.tar.br", "swiftshader.tar.br"]) {
+  try {
+    fs.readFileSync(path.join(CHROMIUM_BIN_DIR, binFile));
+  } catch {
+    /* ملف غير موجود في هذا الإصدار — تجاهل بهدوء */
+  }
+}
+
 // ---------------------------------------------------------------------------
 // أدوات
 
