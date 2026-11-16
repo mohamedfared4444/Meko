@@ -14,7 +14,6 @@
  */
 
 const crypto = require("crypto");
-const { createClient } = require("@libsql/client/web");
 
 /** سر النداء — يُقارن ثابتًا لتجنب تسريب التوقيت */
 const SECRET = "0f4c1e7a93b24d6e8a51c7f2b39d6408";
@@ -42,6 +41,12 @@ function makeDbClient() {
       `متغيرات البيئة ناقصة: TURSO_DATABASE_URL=${url ? "موجود" : "مفقود"} | TURSO_AUTH_TOKEN=${token ? "موجود" : "مفقود"}`,
     );
   }
+  // روابط Turso (https/libsql) → عميل الويب الخالص (HTTP فقط — مضمون على serverless).
+  // روابط file: (تشغيل محلي فقط) → العميل الكامل لأن نسخة الويب لا تدعمها.
+  const createClient =
+    /^https?:\/\//i.test(url)
+      ? require("@libsql/client/web").createClient
+      : require("@libsql/client").createClient;
   return { client: createClient({ url, authToken: token }), urlShape: maskUrlShape(url) };
 }
 
