@@ -32,6 +32,8 @@ const configHandler = require("./api/config");
 const cronHandler = require("./api/cron");
 const videocutHandler = require("./api/videocut");
 const codevideoHandler = require("./api/codevideo");
+const renderPayloadHandler = require("./api/render-payload");
+const renderCompleteHandler = require("./api/render-complete");
 
 const PORT = Number(process.env.PORT || 8787);
 
@@ -81,6 +83,10 @@ const server = http.createServer((req, res) => {
   if (pathname === "/api/codevideo") return wrap(codevideoHandler)(req, res);
   if (pathname === "/api/config") return wrap(configHandler)(req, res);
   if (pathname === "/api/cron") return wrap(cronHandler)(req, res);
+  // الرندر الكامل على GitHub Actions — تخزين الحمولة واستلام الناتج
+  // (النقطة نفسها تفحص الطريقة وop داخليًا، فالتوجيه هنا موحّد لكل الطرق)
+  if (pathname === "/api/render-payload") return wrap(renderPayloadHandler)(req, res);
+  if (pathname === "/api/render-complete") return wrap(renderCompleteHandler)(req, res);
 
   // الملفات الثابتة — الواجهة العربية
   if (pathname === "/" || pathname === "/index.html") {
