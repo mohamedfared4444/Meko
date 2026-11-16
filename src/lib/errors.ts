@@ -3,6 +3,9 @@ import type { ErrorClass } from "./types";
 /**
  * تصنيف أخطاء المزودين — الجدول 4.2 في المواصفة.
  * ترتيب الفحص مقصود وصارم:
+ *  0) temporary إجباري: فشل رفع الصورة إلى مضيف خارجي بعد نجاح التوليد — ليست
+ *     مشكلة مفتاح أبدًا (التوليد نجح والمفتاح سليم والعطل في طرف ثالث) فلا
+ *     يجوز أن تُعطِّل مفتاحًا صالحًا مهما شابه نصها
  *  1) disabled: 401/403 أو رسائل توثيق
  *  2) exhausted: 402 أو رسائل نفاد رصيد — تُفحص قبل 400 لأن بعض المزودين
  *     يرسلون نفاد الرصيد بحالة HTTP 400
@@ -12,6 +15,17 @@ import type { ErrorClass } from "./types";
  */
 export function classifyProviderError(status: number | undefined, message: string): ErrorClass {
   const msg = (message || "").toLowerCase();
+
+  // 0) فشل رفع الصورة الناتجة إلى مضيف صور خارجي — قاعدة حماية المفاتيح:
+  //    التعطيل التلقائي حصرًا لأخطاء المصادقة أو نفاد الرصيد، وفشل الرفع
+  //    الخارجي (حجب IP المراكز البيانات، مهلة، مضيف متوقف…) ليس منهن أبدًا.
+  //    يُفحص أولًا قبل كل الأنماط حتى لا يلتقط أي نمط توثيق نصًا من مضيف الرفع.
+  if (
+    /تعذر رفع|رفع صورة|مضيف صور|نفدت الميزانية الزمنية/.test(msg) ||
+    /image\s*upload|upload(ing)?\s*(image|file|to|fail|error)|failed\s*to\s*upload|image\s*host/.test(msg)
+  ) {
+    return "temporary";
+  }
 
   // 1) مفتاح مرفوض → disabled (يشمل أنماط Cloudflare: Invalid API Token / Authentication error)
   if (status === 401 || status === 403) return "disabled";
