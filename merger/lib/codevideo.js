@@ -190,11 +190,46 @@ function sanitizeWordTimings(raw) {
   return list;
 }
 
+/** ضمان مكتبات Chromium على Vercel قبل الإطلاق:
+ *  كتلة ضبط البيئة في @sparticuz/chromium تعمل عند تحميل الوحدة وتتوقف على
+ *  AWS_EXECUTION_ENV/AWS_LAMBDA_JS_RUNTIME — وإن غابا (كما على بيئات Vercel
+ *  الحالية) فلن تُستخرج أرشيفات المكتبات al2/al2023 ولن يُضبط LD_LIBRARY_PATH،
+ *  فيُطلق «libnss3.so: cannot open shared object» رغم تضمين الأرشيفات في الحزمة.
+ *  هنا نستخرج الأرشيف الناقص بأنفسنا (نفس آلية الحزمة: inflate) ونضبط المتغير. */
+async function ensureChromiumLibs() {
+  try {
+    const binDir = path.join(__dirname, "..", "node_modules", "@sparticuz/chromium", "bin");
+    const libTargets = [
+      { libDir: "/tmp/al2023", archive: "al2023.tar.br" },
+      { libDir: "/tmp/al2", archive: "al2.tar.br" },
+    ];
+    const available = [];
+    for (const { libDir, archive } of libTargets) {
+      const marker = path.join(libDir, "libnss3.so");
+      if (!fs.existsSync(marker)) {
+        const src = path.join(binDir, archive);
+        if (!fs.existsSync(src)) continue;
+        const { default: LambdaFS } = require("@sparticuz/chromium/build/lambdafs");
+        await LambdaFS.inflate(src);
+      }
+      if (fs.existsSync(marker)) available.push(`${libDir}/lib`);
+    }
+    if (available.length) {
+      const current = String(process.env.LD_LIBRARY_PATH || "");
+      const merged = [...new Set([...available, ...current.split(":").filter(Boolean)])].join(":");
+      if (merged !== current) process.env.LD_LIBRARY_PATH = merged;
+    }
+  } catch (err) {
+    console.warn("[codevideo] ensureChromiumLibs:", err && err.message);
+  }
+}
+
 /** إطلاق Chromium (مرة واحدة لكل مهمة) مع أمانات بيئة serverless */
 async function launchBrowser(width, height) {
   const chromium = require("@sparticuz/chromium");
   const puppeteer = require("puppeteer-core");
   const executablePath = await chromium.executablePath();
+  await ensureChromiumLibs();
   await ensureExecutable(executablePath).catch(() => {});
   return puppeteer.launch({
     args: [...chromium.args, "--font-render-hinting=none", "--hide-scrollbars"],
