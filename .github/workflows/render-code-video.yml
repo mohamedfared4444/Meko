@@ -1,0 +1,115 @@
+name: Render Code Video (FHD 30fps)
+
+# الرندر الكامل لفيديو الأنيميشن البرمجي خارج قيود Vercel Serverless:
+# عامل ubuntu يرندر كل الإطارات بمعدل 30fps ثابت وأبعاد FHD كاملة بلا أي
+# تخفيض أو مهلة، يرفع MP4 إلى meko-manger (/api/render-complete) ويحدّث
+# حالة المهمة في Turso عبر الخدمة نفسها (status=completed, progress=100,
+# video_url=…). يُطلق تلقائيًا من Meko عند توفر GITHUB_TOKEN، ويدويًا من
+# تبويب Actions بمشهد صغير عبر html_code_b64.
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_id:
+        description: "معرّف المهمة في Turso (tasks.id) — يُحدَّث عند الاكتمال"
+        required: true
+        type: string
+      job_id:
+        description: "معرّف مهمة الدمج (jobs.id) — مفتاح قدرة التحديث على meko-manger"
+        required: true
+        type: string
+      payload_url:
+        description: "رابط الحمولة الكاملة من meko-manger (/api/render-payload?id=…) — المصدر الأساسي للكود والصوت والتوقيتات"
+        required: false
+        type: string
+      html_code_b64:
+        description: "كود المشهد base64 (بديل يدوي للمشاهد الصغيرة <40KB إن غاب payload_url)"
+        required: false
+        type: string
+      audio_url:
+        description: "رابط الصوت MP3/WAV (اختياري — يحدد مدة الفيديو عند وجوده)"
+        required: false
+        type: string
+      word_timings_json:
+        description: "توقيتات الكلمات JSON (اختياري — للأكواد الصغيرة؛ الكبيرة عبر payload_url)"
+        required: false
+        type: string
+      width:
+        description: "عرض الفيديو"
+        required: false
+        type: string
+        default: "1080"
+      height:
+        description: "ارتفاع الفيديو"
+        required: false
+        type: string
+        default: "1920"
+      fps:
+        description: "معدل الإطارات الثابت (حقيقي — بلا تخفيض)"
+        required: false
+        type: string
+        default: "30"
+      duration:
+        description: "المدة بالثواني للفيديو الصام (مع الصوت تكون مدة الصوت هي المرجع)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write # لإرفاق الناتج في إصدار احتياطي عند فشل الرفع إلى meko-manger
+
+concurrency:
+  group: render-${{ github.event.inputs.task_id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # المدخلات تمر عبر env (لا تُقحم نصيًا في run) — حماية من حقن السكربتات
+      INPUT_TASK_ID: ${{ github.event.inputs.task_id }}
+      INPUT_JOB_ID: ${{ github.event.inputs.job_id }}
+      INPUT_PAYLOAD_URL: ${{ github.event.inputs.payload_url }}
+      INPUT_HTML_CODE_B64: ${{ github.event.inputs.html_code_b64 }}
+      INPUT_AUDIO_URL: ${{ github.event.inputs.audio_url }}
+      INPUT_WORD_TIMINGS_JSON: ${{ github.event.inputs.word_timings_json }}
+      INPUT_WIDTH: ${{ github.event.inputs.width }}
+      INPUT_HEIGHT: ${{ github.event.inputs.height }}
+      INPUT_FPS: ${{ github.event.inputs.fps }}
+      INPUT_DURATION: ${{ github.event.inputs.duration }}
+      MERGER_BASE_URL: ${{ vars.MERGER_BASE_URL }}
+      TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+      TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      REPO_NAME: ${{ github.repository }}
+
+    steps:
+      - name: جلب المستودع
+        uses: actions/checkout@v4
+
+      - name: إعداد Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: فحص FFmpeg وتثبيت الاعتماديات
+        run: |
+          ffmpeg -version | head -1 || { sudo apt-get update && sudo apt-get install -y ffmpeg; }
+          npm install --no-save --no-audit --no-fund puppeteer-core@23 @libsql/client@0.18
+
+      - name: رندر المشهد FHD 30fps ونشر الناتج
+        run: node scripts/render-code-video.js
+
+      - name: حفظ الفيديو للفحص (Artifact)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-video-${{ github.event.inputs.job_id }}
+          path: /tmp/code-video-final.mp4
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: تعليم المهمة فاشلة عند أي فشل
+        if: failure()
+        run: node scripts/render-code-video.js --fail "فشلت خطوة في workflow الرندر الكامل (راجع سجل الخطوة الفاشلة أعلاه)."
