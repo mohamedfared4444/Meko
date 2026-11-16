@@ -28,15 +28,66 @@ function loadEnvFile() {
   }
 }
 
+/**
+ * تعقيم قيمة متغير بيئة — إزالة الاقتباسات المحيطة والمسافات والأحرف غير
+ * المرئية (RTL/NBSP/BOM) وأسطر جديدة داخلية تُدخل عند لصق القيمة في Vercel.
+ * هذه الأحرف تجعل `new URL()` يرمي «Invalid URL» الغامض من عميل Turso.
+ */
+function sanitizeEnvValue(raw) {
+  return (raw ?? "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u00A0\u00AD\u1680\u2000-\u200F\u202A-\u202E\u2066-\u2069\u2060\uFEFF\u2028\u2029\u0000-\u001F\u007F]/g, "")
+    .trim()
+    .replace(/^["'`]+/, "")
+    .replace(/["'`]+$/, "")
+    .trim();
+}
+
+/** وصف تشخيصي آمن للقيمة (بدون كشف التوكن) — يُستخدم في رسائل الخطأ */
+function describeEnvValue(v) {
+  const problems = [];
+  const original = v ?? "";
+  if (original !== original.trim()) problems.push("مسافات/أسطر في الأطراف");
+  if (/["'`]/.test(original)) problems.push("اقتباسات محيطة");
+  if (/[\u00A0\u200B-\u200F\u202A-\u202E\uFEFF]/.test(original)) problems.push("أحرف غير مرئية (نسخ من محادثة)");
+  if (/[\r\n\u2028\u2029]/.test(original)) problems.push("أسطر جديدة داخلية");
+  const shown = v ? `${v.slice(0, 12)}…${v.slice(-4)} (${v.length} حرفًا)` : "(فارغ)";
+  return `${shown}${problems.length ? " — مشاكل مكتشفة: " + problems.join(", ") : ""}`;
+}
+
 function getDb() {
   if (!client) {
     loadEnvFile();
-    const url = process.env.TURSO_DATABASE_URL;
-    const authToken = process.env.TURSO_AUTH_TOKEN;
+    const url = sanitizeEnvValue(process.env.TURSO_DATABASE_URL);
+    const authToken = sanitizeEnvValue(process.env.TURSO_AUTH_TOKEN);
     if (!url || !authToken) {
-      throw new Error("TURSO_DATABASE_URL و TURSO_AUTH_TOKEN مطلوبان في متغيرات البيئة");
+      throw new Error(
+        "TURSO_DATABASE_URL و TURSO_AUTH_TOKEN مطلوبان في متغيرات البيئة (Vercel: Production) ثم أعد النشر",
+      );
     }
-    client = createClient({ url, authToken });
+    // تطبيع الرابط: libsql:// مكافئ 100% لـ https:// لدى Turso — والتطبيع يزيل
+    // أي اختلاف صيغة يجعل عميل hrana يرمي «Invalid URL» الغامض
+    let normalized = url;
+    if (/^libsql:\/\//i.test(normalized)) normalized = "https://" + normalized.slice("libsql://".length);
+    normalized = normalized.replace(/\/+$/, "");
+    // تحقق مسبق بنفس المحلل الذي يستخدمه عميل hrana — برسالة عربية واضحة بدل «Invalid URL»
+    try {
+      const u = new URL(normalized);
+      if (!/^https?:$/.test(u.protocol)) {
+        throw new Error(`صيغة TURSO_DATABASE_URL غير مدعومة (${u.protocol}) — يجب أن تبدأ بـ libsql:// أو https://. القيمة الحالية: ${describeEnvValue(url)}`);
+      }
+      if (!u.hostname.includes(".")) {
+        throw new Error(`مضيف TURSO_DATABASE_URL غير صالح (${u.hostname}) — القيمة الحالية: ${describeEnvValue(url)}`);
+      }
+    } catch (e) {
+      if (e instanceof RangeError || /Invalid URL/i.test(e.message || "")) {
+        throw new Error(
+          `TURSO_DATABASE_URL في متغيرات البيئة تالفة ولا يمكن تحليلها كرابط — القيمة الحالية: ${describeEnvValue(url)}. أعد لصقها في Vercel (Production) بصيغة libsql://<host> بدون اقتباسات أو مسافات أو أسطر داخلية ثم أعد النشر.`,
+        );
+      }
+      throw e;
+    }
+    client = createClient({ url: normalized, authToken });
   }
   return client;
 }
