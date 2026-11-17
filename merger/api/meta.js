@@ -24,8 +24,9 @@ const { getDb, ensureSchema } = require("../lib/db");
 
 /** المفتاح الوحيد المسموح — توكن إطلاق الرندر الكامل على GitHub Actions */
 const ALLOWED_KEY = "github_token";
-/** مستودع الرندر — التحقق أن التوكن يملك وصولًا إليه (env override للاختبار المحلي) */
-const RENDER_REPO = String(process.env.GH_RENDER_REPO || "mohamedfared4444/Meko");
+/** مستودع الرندر العام (meko-renderer) — التحقق أن التوكن يملك وصولًا إليه
+ *  (env override للاختبار المحلي) */
+const RENDER_REPO = String(process.env.GH_RENDER_REPO || "mohamedfared4444/meko-renderer");
 /** صيغة توكن GitHub: أحرف/أرقام/شرطة سفلية، 20–255 حرفًا، بلا أي مسافات أو تحكم */
 const TOKEN_RE = /^[A-Za-z0-9_]{20,255}$/;
 

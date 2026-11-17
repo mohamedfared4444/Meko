@@ -527,7 +527,9 @@ async function resolveChrome() {
 
 /** حقن خطي Meko (Noto Sans Arabic + Liberation Sans) كـ @font-face — نفس سلوك محرك Vercel */
 function injectFonts(html) {
-  const fontsDir = path.join(__dirname, "..", "merger", "fonts");
+  // الخطوط بجانب السكربت في مستودع الرندر (fonts/) أو في Meko (merger/fonts)
+  const fontsCandidates = [path.join(__dirname, "..", "fonts"), path.join(__dirname, "..", "merger", "fonts")];
+  const fontsDir = fontsCandidates.find((p) => fs.existsSync(path.join(p, "NotoSansArabic-Regular.ttf"))) || fontsCandidates[0];
   const families = { MekoArabic: "NotoSansArabic-Regular.ttf", MekoLatin: "LiberationSans-Regular.ttf" };
   const faces = [];
   const chain = [];

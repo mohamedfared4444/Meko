@@ -43,8 +43,9 @@ const TTS_TIMEOUT_MS = 40_000;
 // ---------------------------------------------------------------------------
 // الرندر الكامل على GitHub Actions — FHD 30fps بلا أي تخفيض (خارج مهلة Vercel)
 
-/** المستودع الذي يُطلق عليه workflow الرندر الكامل */
-const GH_RENDER_REPO = sanitizeEnvValue(process.env.GH_RENDER_REPO) || "mohamedfared4444/Meko";
+/** المستودع العام المخصص للرندر فقط (meko-renderer) — يُطلق عليه workflow الرندر
+ *  الكامل كي تبقى دقائق Actions مجانية غير محدودة ويبقى Meko نفسه خاصًا ومحميًا */
+const GH_RENDER_REPO = sanitizeEnvValue(process.env.GH_RENDER_REPO) || "mohamedfared4444/meko-renderer";
 /** الفرع المرجعي لإطلاق الـ workflow */
 const GH_RENDER_REF = sanitizeEnvValue(process.env.GH_RENDER_REF) || "main";
 const GH_WORKFLOW_FILE = "render-code-video.yml";
