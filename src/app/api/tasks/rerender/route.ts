@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireAccess } from "@/lib/auth";
 import { rerenderCodeVideoTask } from "@/lib/codevideo";
 import { describeDbError, getTask } from "@/lib/turso";
 
@@ -13,6 +14,8 @@ export const maxDuration = 60;
  * بلا أي إعادة توليد. المهمة تعود للظهور في الشاشة المباشرة فورًا.
  */
 export async function POST(req: Request) {
+  const denied = await requireAccess(req);
+  if (denied) return denied;
   let body: { id?: string };
   try {
     body = (await req.json()) as typeof body;

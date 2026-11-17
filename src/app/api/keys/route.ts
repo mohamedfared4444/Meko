@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
+import { requireAccess } from "@/lib/auth";
 import { describeDbError, findDuplicateKey, insertApiKey, listApiKeys } from "@/lib/turso";
 import { maskKey } from "@/lib/errors";
 import type { ProviderId } from "@/lib/types";
@@ -15,8 +16,10 @@ function normalizeHuggingFaceKey(key: string): string {
   return key.replace(/^hf_/i, "hf_");
 }
 
-/** عرض المفاتيح كاملة الترتيب — مقنّعة دائمًا، لا يُعاد المفتاح الكامل في أي استجابة */
-export async function GET() {
+/** عرض المفاتيح كاملة الترتيب — محمية: جلسة لوحة أو Bearer مفتاح الأتمتة؛ مقنّعة دائمًا */
+export async function GET(req: Request) {
+  const denied = await requireAccess(req);
+  if (denied) return denied;
   try {
     const keys = await listApiKeys();
     return NextResponse.json({
@@ -42,8 +45,10 @@ export async function GET() {
   }
 }
 
-/** إضافة مفتاح — مع رفض التكرار لنفس المزود والتحقق من صيغة مفاتيح Cloudflare */
+/** إضافة مفتاح — محمية: جلسة لوحة أو Bearer مفتاح الأتمتة */
 export async function POST(req: Request) {
+  const denied = await requireAccess(req);
+  if (denied) return denied;
   let body: { provider?: string; api_key?: string; label?: string };
   try {
     body = (await req.json()) as typeof body;

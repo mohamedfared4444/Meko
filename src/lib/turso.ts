@@ -378,6 +378,22 @@ export async function setMeta(key: string, value: string): Promise<void> {
   });
 }
 
+/** حذف قيمة إعداد من جدول meta — تُستخدم لجلسات لوحة التحكم المنتهية/المُلغاة */
+export async function deleteMeta(key: string): Promise<void> {
+  await ensureSchema();
+  await getTurso().execute({ sql: `DELETE FROM meta WHERE key = ?`, args: [key] });
+}
+
+/** كل أزواج meta التي تبدأ مفاتيحها ببادئة معينة — لتنظيف الجلسات المنتهية دفعة واحدة */
+export async function listMetaByPrefix(prefix: string): Promise<Array<{ key: string; value: string }>> {
+  await ensureSchema();
+  const r = await getTurso().execute({
+    sql: `SELECT key, value FROM meta WHERE key LIKE ? || '%'`,
+    args: [prefix],
+  });
+  return r.rows.map((row) => ({ key: String(row.key), value: String(row.value ?? "") }));
+}
+
 // ---------------------------------------------------------------------------
 // عمليات المفاتيح
 

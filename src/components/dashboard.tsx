@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -157,6 +157,81 @@ function modelLabel(model: string): string {
 // ---------------------------------------------------------------------------
 // اللوحة الرئيسية
 
+/**
+ * بوابة الدخول — كلمة المرور هي مفتاح الأتمتة نفسه (لا توكن يُخزن في الواجهة):
+ * النجاح يضبط كوكي HttpOnly عبر /api/auth/login وتتدفق الجلسة تلقائيًا مع كل النداءات.
+ */
+function LoginGate({ onLogin }: { onLogin: () => void | Promise<void> }) {
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e?: FormEvent) => {
+    e?.preventDefault();
+    if (busy || !password.trim()) {
+      if (!password.trim()) setError("أدخل كلمة المرور أولًا.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: password.trim() }),
+      });
+      const j = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!r.ok || !j.ok) {
+        setError(j.error ?? "فشل تسجيل الدخول.");
+        return;
+      }
+      setPassword("");
+      await onLogin();
+    } catch {
+      setError("تعذر الاتصال بالخادم — تحقق من الشبكة ثم أعد المحاولة.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form
+      onSubmit={submit}
+      className="w-full max-w-sm rounded-2xl border border-white/10 bg-white/[0.03] p-6 space-y-4 shadow-2xl"
+    >
+      <div className="flex items-center gap-2.5">
+        <span className="w-9 h-9 rounded-lg bg-primary/20 text-primary flex items-center justify-center shrink-0">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z" />
+          </svg>
+        </span>
+        <div>
+          <h1 className="text-[15px] font-bold leading-tight">Meko — لوحة التحكم</h1>
+          <p className="text-[11px] text-muted-foreground leading-tight">الدخول محمي بكلمة مرور</p>
+        </div>
+      </div>
+      <Input
+        type="password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        placeholder="كلمة المرور (مفتاح الأتمتة)"
+        className="h-10 text-[13px] font-mono bg-white/5 border-white/15"
+        dir="ltr"
+        autoComplete="current-password"
+      />
+      {error && (
+        <p className="text-[12px] text-red-400 bg-red-500/10 border border-red-500/25 rounded-lg px-3 py-2">{error}</p>
+      )}
+      <Button type="submit" disabled={busy} className="w-full h-10 text-[13px] font-bold">
+        {busy ? "جارٍ التحقق…" : "دخول"}
+      </Button>
+      <p className="text-[10px] text-muted-foreground leading-relaxed">
+        كلمة المرور نفسها مفتاح بوابة الأتمتة — تُتحقق على الخادم فقط، ولا تُخزن في المتصفح إطلاقًا.
+      </p>
+    </form>
+  );
+}
+
 export default function Dashboard() {
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [stats, setStats] = useState<TasksResponse["stats"] | null>(null);
@@ -167,6 +242,8 @@ export default function Dashboard() {
   const [tasksError, setTasksError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const [isLiveSyncing, setIsLiveSyncing] = useState(false);
+  /** حالة المصادقة: null = قيد التحقق، true = مسموح، false = أظهر بوابة الدخول (الكوكي HttpOnly فقط — لا توكن في الواجهة) */
+  const [authed, setAuthed] = useState<boolean | null>(null);
 
   // مراجع حماية التدفق: طلب واحد قيد الطيران للواجهة، وإيقاف التحديث عند التفريغ
   const tasksFetching = useRef(false);
@@ -179,6 +256,10 @@ export default function Dashboard() {
     setIsLiveSyncing(true);
     try {
       const r = await fetch("/api/tasks?limit=50", { cache: "no-store" });
+      if (r.status === 401) {
+        if (mounted.current) setAuthed(false);
+        return;
+      }
       const j = (await r.json()) as TasksResponse;
       if (!mounted.current) return;
       if (j.error) {
@@ -199,6 +280,10 @@ export default function Dashboard() {
   const loadKeys = useCallback(async () => {
     try {
       const r = await fetch("/api/keys", { cache: "no-store" });
+      if (r.status === 401) {
+        if (mounted.current) setAuthed(false);
+        return;
+      }
       const j = (await r.json()) as { keys: KeyItem[] };
       if (mounted.current) setKeys(j.keys ?? []);
     } catch {
@@ -218,6 +303,16 @@ export default function Dashboard() {
 
   useEffect(() => {
     mounted.current = true;
+    // فحص الجلسة أولًا — الكوكي HttpOnly يتدفق تلقائيًا مع كل نداءات نفس الأصل
+    (async () => {
+      try {
+        const r = await fetch("/api/auth/status", { cache: "no-store" });
+        const j = (await r.json()) as { authenticated?: boolean; configured?: boolean };
+        if (mounted.current) setAuthed(Boolean(j.authenticated));
+      } catch {
+        if (mounted.current) setAuthed(false);
+      }
+    })();
     void loadHealth();
     void loadKeys();
     void loadTasks();
@@ -248,6 +343,32 @@ export default function Dashboard() {
   const processing = tasks.filter((t) => t.status === "processing" || t.status === "pending");
   const completed = tasks.filter((t) => t.status === "completed");
   const failed = tasks.filter((t) => t.status === "failed");
+
+  // شاشة التحقق الأولية — لا تظهر أي بيانات قبل معرفة حالة الجلسة
+  if (authed === null) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background text-foreground">
+        <Toaster richColors position="top-center" />
+        <p className="text-muted-foreground text-sm animate-pulse">جارٍ التحقق من الجلسة…</p>
+      </div>
+    );
+  }
+  // بوابة الدخول — تُخفي كل بيانات المهام والمفاتيح عن غير المصرح لهم
+  if (authed === false) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background text-foreground px-4">
+        <Toaster richColors position="top-center" />
+        <LoginGate
+          onLogin={async () => {
+            setAuthed(true);
+            void loadHealth();
+            void loadKeys();
+            void loadTasks();
+          }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-row bg-background text-foreground">

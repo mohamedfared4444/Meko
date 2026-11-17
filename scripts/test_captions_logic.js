@@ -10,7 +10,7 @@
 const fs = require("fs");
 const path = require("path");
 
-const SRC = path.join(__dirname, "..", "renderer-repo", "scripts", "render-code-video.js");
+const SRC = path.join(__dirname, "render-code-video.js");
 const src = fs.readFileSync(SRC, "utf8");
 
 // استخراج دالة installCaptionsInPage بمطابقة الأقواس

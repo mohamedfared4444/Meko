@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { requireAccess } from "@/lib/auth";
 import { runFullVideo } from "@/lib/fullvideo";
 import { runCodeVideo } from "@/lib/codevideo";
 import { describeDbError } from "@/lib/turso";
@@ -57,6 +58,8 @@ function cleanScenes(raw: string[] | undefined): string[] | undefined {
 }
 
 export async function POST(req: Request) {
+  const denied = await requireAccess(req);
+  if (denied) return denied;
   let raw: unknown;
   try {
     raw = await req.json();

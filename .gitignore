@@ -8,3 +8,9 @@ tool-results/
 renderer-repo/
 agent-ctx/
 .automation-key
+
+# ملفات البيئة الحساسة — لا تُتتبع أبدًا
+.env
+.env.local
+.env.*.local
+merger/.env

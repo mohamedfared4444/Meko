@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
+import { bearerOf, resolveSecretKey, secretMatch } from "@/lib/auth";
 import { runCodeVideo, rerenderCodeVideoTask } from "@/lib/codevideo";
-import { describeDbError, getMeta, getTask } from "@/lib/turso";
+import { describeDbError, getTask } from "@/lib/turso";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,32 +50,8 @@ const bodySchema = z.object({
   aspect_ratio: z.enum(["9:16", "16:9", "1:1"]).optional(),
 });
 
-/** مفتاح البوابة — env أولًا ثم meta.automation_key في Turso (بلا أي كشف للقيمة) */
-async function resolveApiKey(): Promise<string | null> {
-  const fromEnv = (process.env.AUTOMATION_API_KEY || "").trim();
-  if (fromEnv) return fromEnv;
-  try {
-    const stored = await getMeta("automation_key");
-    return stored ? stored.trim() || null : null;
-  } catch {
-    return null;
-  }
-}
-
-function bearerOf(req: Request): string {
-  const auth = req.headers.get("authorization") || "";
-  return auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-}
-
-/** مقارنة ثابتة الزمن كي لا يكشف خطأ التوقيت عن طول المفتاح الصحيح */
-function keysMatch(provided: string, secret: string): boolean {
-  if (!provided || !secret || provided.length !== secret.length) return false;
-  try {
-    return timingSafeEqual(Buffer.from(provided, "utf8"), Buffer.from(secret, "utf8"));
-  } catch {
-    return false;
-  }
-}
+/** مفتاح البوابة ومقارنته الآمنة — موحّد في @/lib/auth (env أولًا ثم meta.automation_key) */
+const resolveApiKey = resolveSecretKey;
 
 function unauthorized(resolved: boolean) {
   return NextResponse.json(
@@ -90,7 +66,7 @@ function unauthorized(resolved: boolean) {
 
 export async function POST(req: Request) {
   const apiKey = await resolveApiKey();
-  if (!apiKey || !keysMatch(bearerOf(req), apiKey)) return unauthorized(Boolean(apiKey));
+  if (!apiKey || !secretMatch(bearerOf(req), apiKey)) return unauthorized(Boolean(apiKey));
 
   let raw: unknown;
   try {
@@ -149,7 +125,7 @@ export async function POST(req: Request) {
 
 export async function GET(req: Request) {
   const apiKey = await resolveApiKey();
-  if (!apiKey || !keysMatch(bearerOf(req), apiKey)) return unauthorized(Boolean(apiKey));
+  if (!apiKey || !secretMatch(bearerOf(req), apiKey)) return unauthorized(Boolean(apiKey));
 
   const taskId = (new URL(req.url).searchParams.get("task_id") || "").trim();
   if (!taskId) return NextResponse.json({ error: "task_id مطلوب في الاستعلام." }, { status: 400 });

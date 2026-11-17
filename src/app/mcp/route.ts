@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import {
   listMedia,
@@ -518,7 +519,15 @@ function authOk(req: Request): boolean {
   const token = process.env.MCP_ACCESS_TOKEN;
   if (!token) return true;
   const header = req.headers.get("authorization") || "";
-  return header === `Bearer ${token}`;
+  if (!header.startsWith("Bearer ")) return false;
+  const provided = header.slice(7).trim();
+  if (!provided || provided.length !== token.trim().length) return false;
+  try {
+    // مقارنة ثابتة الزمن كي لا يكشف خطأ التوقيت عن التوكن الصحيح
+    return timingSafeEqual(Buffer.from(provided, "utf8"), Buffer.from(token.trim(), "utf8"));
+  } catch {
+    return false;
+  }
 }
 
 function jsonError(status: number, message: string): Response {

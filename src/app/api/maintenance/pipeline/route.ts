@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { timingSafeEqual } from "node:crypto";
 import { postReport, runPipeline } from "@/lib/maintenance";
 
 /**
@@ -11,10 +12,21 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
+/** سر النداء اليدوي من env MAINTENANCE_KEY — لا يُكتب في الكود (السر القديم كان متتبعًا في Git فأُزيل) */
+function maintenanceKeyOk(secret: string | null): boolean {
+  const expected = (process.env.MAINTENANCE_KEY || "").trim();
+  if (!expected || !secret || secret.length !== expected.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(secret, "utf8"), Buffer.from(expected, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
 export async function GET(req: Request) {
   const secret = new URL(req.url).searchParams.get("key");
   const isCron = req.headers.get("x-vercel-cron") !== null;
-  if (!isCron && secret !== "0f4c1e7a93b24d6e8a51c7f2b39d6408") {
+  if (!isCron && !maintenanceKeyOk(secret)) {
     return new NextResponse("Not Found", { status: 404 });
   }
   try {

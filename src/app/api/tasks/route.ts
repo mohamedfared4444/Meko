@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireAccess } from "@/lib/auth";
 import { refreshTask } from "@/lib/coordinator";
 import { CODE_VIDEO_MODEL } from "@/lib/codevideo";
 import { FULL_VIDEO_MODEL } from "@/lib/fullvideo";
@@ -250,6 +251,8 @@ function taskToResponse(t: TaskRow) {
 }
 
 export async function GET(req: Request) {
+  const denied = await requireAccess(req);
+  if (denied) return denied;
   const url = new URL(req.url);
   const limit = Math.max(1, Math.min(50, Number(url.searchParams.get("limit") || 20)));
   const type = (url.searchParams.get("type") || undefined) as MediaType | undefined;
@@ -280,6 +283,8 @@ export async function GET(req: Request) {
 
 /** تفاصيل مهمة واحدة — تُستخدم للعرض الحي عند فتح مهمة محددة من الأرشيف */
 export async function POST(req: Request) {
+  const denied = await requireAccess(req);
+  if (denied) return denied;
   let body: { id?: string };
   try {
     body = (await req.json()) as typeof body;

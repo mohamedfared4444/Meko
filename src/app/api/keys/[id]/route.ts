@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
+import { requireAccess } from "@/lib/auth";
 import { deleteApiKey, describeDbError, getApiKey, setApiKeyStatus } from "@/lib/turso";
 import { maskKey } from "@/lib/errors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** تعطيل / تنشيط يدوي لمفتاح */
+/** تعطيل / تنشيط يدوي لمفتاح — محمية: جلسة لوحة أو Bearer مفتاح الأتمتة */
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const denied = await requireAccess(req);
+  if (denied) return denied;
   const { id } = await params;
   let body: { action?: string; status?: string };
   try {
@@ -40,8 +43,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
 }
 
-/** حذف مفتاح نهائيًا */
-export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+/** حذف مفتاح نهائيًا — محمية: جلسة لوحة أو Bearer مفتاح الأتمتة */
+export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const denied = await requireAccess(req);
+  if (denied) return denied;
   const { id } = await params;
   try {
     const existing = await getApiKey(id);
