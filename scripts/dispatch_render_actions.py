@@ -17,7 +17,8 @@ import urllib.error
 
 REMOTE = subprocess.check_output(["git", "remote", "get-url", "origin"], text=True, cwd="/home/z/my-project").strip()
 TOKEN = re.search(r"https://([^@]+)@github\.com/", REMOTE).group(1)
-REPO = "mohamedfared4444/Meko"
+REPO = __import__("os").environ.get("MEKO_RENDER_REPO", "mohamedfared4444/meko-renderer")
+MEKO_REPO = "mohamedfared4444/Meko"  # فحص نشر Vercel يستهدف مستودع Meko دائمًا
 API = "https://api.github.com"
 
 
@@ -44,7 +45,7 @@ def deploy():
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, cwd="/home/z/my-project").strip()
     print(f"HEAD: {head_sha()}")
     for attempt in range(30):  # حتى 15 دقيقة
-        st, statuses = api(f"/repos/{REPO}/commits/{sha}/status")
+        st, statuses = api(f"/repos/{MEKO_REPO}/commits/{sha}/status")
         if st == 200:
             total = statuses.get("total_count", 0)
             state = statuses.get("state")
