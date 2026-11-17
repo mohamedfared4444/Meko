@@ -1,0 +1,11 @@
+var R=require("../../../../chunks/[turbopack]_runtime.js")("server/app/api/automate/video/route.js")
+R.c("server/chunks/[root-of-the-server]__318902c2._.js")
+R.c("server/chunks/node_modules_next_1402a1da._.js")
+R.c("server/chunks/src_lib_codevideo_ts_f431eafe._.js")
+R.c("server/chunks/[root-of-the-server]__8f5ebbc3._.js")
+R.c("server/chunks/node_modules_zod_v4_7bd95ad6._.js")
+R.c("server/chunks/[root-of-the-server]__af530af1._.js")
+R.c("server/chunks/[root-of-the-server]__ea70321e._.js")
+R.c("server/chunks/_next-internal_server_app_api_automate_video_route_actions_8302761a.js")
+R.m(82713)
+module.exports=R.m(82713).exports

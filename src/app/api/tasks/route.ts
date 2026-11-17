@@ -47,7 +47,7 @@ function parseDbTime(raw: string | null | undefined): number {
 
 /** تفاصيل الخطوات الحية للمهمة — تُعرض في لوحة التحكم مباشرة */
 interface TaskDetail {
-  /** المرحلة الحالية لخط الإنتاج: script | audio | images | merge */
+  /** المرحلة الحالية لخط الإنتاج: script | audio | images | merge | render | ready */
   stage: string | null;
   /** عدد مشاهد خط الإنتاج الكلي */
   scenesTotal: number | null;
@@ -63,6 +63,13 @@ interface TaskDetail {
   lastNote: string | null;
   /** حزمة النشر الجاهزة (عناوين + وصف + هاشتاغات) — من params_json.seoPack */
   seo: { titles: string[]; description: string; hashtags: string[] } | null;
+  /** الفيديو البرمجي: رابط الناتج النهائي ورابط التحميل المباشر */
+  videoUrl: string | null;
+  videoDownloadUrl: string | null;
+  /** الفيديو البرمجي: أين رُندر الناتج (github-actions | vercel) */
+  renderHost: string | null;
+  /** الفيديو البرمجي: هل طبقة الترجمة الحركية مفعّلة؟ */
+  captions: boolean;
 }
 
 /** المزود من آخر محاولة في سجل المحاولات */
@@ -99,6 +106,10 @@ function buildDetail(task: TaskRow): TaskDetail {
     currentProvider: task.provider ?? lastAttemptProvider(task),
     lastNote: task.error_message,
     seo: null,
+    videoUrl: null,
+    videoDownloadUrl: null,
+    renderHost: null,
+    captions: true,
   };
   if (task.model === CODE_VIDEO_MODEL) {
     try {
@@ -107,12 +118,19 @@ function buildDetail(task: TaskRow): TaskDetail {
         script?: string;
         audioUrl?: string;
         videoUrl?: string;
+        videoDownloadUrl?: string;
+        renderHost?: string;
+        captions?: boolean;
         wordTimings?: unknown[];
       };
       detail.hasAudio = !!p.audioUrl;
       detail.audioUrl = p.audioUrl ?? null;
-      // المرحلة: فيديو جاهز أو رندر جارٍ → الرندر، وإلا الصوت (بلا سكربت → الرندر مباشرة)
-      detail.stage = p.videoUrl || !p.script || p.audioUrl ? "render" : "audio";
+      detail.videoUrl = p.videoUrl ?? null;
+      detail.videoDownloadUrl = p.videoDownloadUrl ?? (p.videoUrl ? `${p.videoUrl}?download=1` : null);
+      detail.renderHost = p.renderHost ?? null;
+      detail.captions = p.captions !== false;
+      // المراحل الثلاث: جاهز (فيديو موجود) ← رندر سحابي (صوت جاهز أو بلا سكربت) ← صوت وتوقيتات
+      detail.stage = p.videoUrl ? "ready" : !p.script || p.audioUrl ? "render" : "audio";
     } catch {
       /* params تالفة — تُعرض الأساسيات فقط */
     }

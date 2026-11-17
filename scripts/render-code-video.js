@@ -115,11 +115,28 @@ async function main() {
     log(`فيديو صام — المدة ${duration.toFixed(2)} ثانية`);
   }
 
+  // 3ب) موسيقى خلفية هادئة (اختيارية): رابط http/data أو "ambient" لتوليد نغمة
+  // خفيفة محليًا عبر FFmpeg — تُخلط بمستوى منخفض مع خفض تلقائي أثناء الكلام
+  const bgMusicUrl = String(process.env.INPUT_BG_MUSIC_URL || payload.bg_music_url || "").trim() || null;
+  let bgPath = null;
+  if (bgMusicUrl) {
+    bgPath = await resolveBackgroundMusic(bgMusicUrl, duration);
+    log(`موسيقى الخلفية جاهزة (${/^(ambient|auto|true|1)$/i.test(bgMusicUrl) ? "توليد Ambient محليًا" : "تنزيل من الرابط"}) — ستُخلط بمستوى منخفض مع sidechain ducking`);
+  }
+
+  // 3ج) الترجمة الحركية — افتراضيًا مفعّلة (captions !== false) عند وجود توقيتات
+  const captionsEnabled = payload.captions !== false;
+
   await pingProgress(12);
-  await writeSummary(`**الرندر الكامل**: ${width}×${height} @ ${fps}fps — ${duration.toFixed(1)}s — ${Math.round(fps * duration)} إطارًا${audioPath ? " — مع صوت" : " — صامت"}`);
+  await writeSummary(
+    `**الرندر الكامل**: ${width}×${height} @ ${fps}fps — ${duration.toFixed(1)}s — ${Math.round(fps * duration)} إطارًا` +
+    (audioPath ? " — مع تعليق صوتي" : " — بلا تعليق صوتي") +
+    (bgPath ? " — مع موسيقى خلفية (ducking)" : "") +
+    (captionsEnabled && wordTimings ? " — مع الترجمة الحركية" : captionsEnabled ? " — الترجمة الحركية بلا توقيتات (متعطلة)" : " — الترجمة الحركية معطلة (captions=false)"),
+  );
 
   // 4) الرندر — كل الإطارات بمعدل ثابت حقيقي، بلا أي تخفيض
-  const render = await renderVideo({ html, width, height, fps, duration, wordTimings, audioPath });
+  const render = await renderVideo({ html, width, height, fps, duration, wordTimings, audioPath, bgPath, captionsEnabled });
   log(`الرندر اكتمل: ${render.frames} إطارًا — ${render.size} بايت — ${((Date.now() - startedAt) / 1000).toFixed(0)} ثانية`);
 
   // 5) النشر: أجزاء إلى meko-manger ثم finalize (يحدّث Turso)
@@ -167,6 +184,8 @@ async function provisionTask(payload) {
         duration_seconds: Number(process.env.INPUT_DURATION) || Number(payload.duration_seconds) || DEFAULT_DURATION,
         audio_url: String(process.env.INPUT_AUDIO_URL || payload.audio_url || "") || null,
         word_timings: payload.word_timings || null,
+        bg_music_url: String(process.env.INPUT_BG_MUSIC_URL || payload.bg_music_url || "") || null,
+        captions: payload.captions === false ? false : true,
       }),
     },
     30_000,
@@ -200,7 +219,7 @@ async function loadPayload() {
 // ---------------------------------------------------------------------------
 // الرندر
 
-async function renderVideo({ html, width, height, fps, duration, wordTimings, audioPath }) {
+async function renderVideo({ html, width, height, fps, duration, wordTimings, audioPath, bgPath, captionsEnabled }) {
   const ffmpeg = await ensureFfmpeg();
   const browser = await launchBrowser(width, height);
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codevid-"));
@@ -236,15 +255,51 @@ async function renderVideo({ html, width, height, fps, duration, wordTimings, au
       await writeSummary(`**ملء الكادر**: المشهد ${fit.naturalW}×${fit.naturalH} → ${width}×${height} — ${fit.strategy === "viewport-dsf" ? "تكبير بدقة أعلى (deviceScaleFactor)" : fit.strategy === "transform-cover" ? "تحويل CSS مع اقتصاص طفيف للمواءمة" : "تحويل CSS مع حشو بخلفية المشهد"} (scale ${fit.scale.toFixed(3)})`);
     }
 
+    // طبقة الترجمة الحركية فوق المشهد — منطقة YouTube Shorts الآمنة (72% من
+    // الارتفاع) مع تمييز الكلمة المنطوقة ودعم RTL التلقائي للعربية
+    let captionsInstalled = false;
+    if (captionsEnabled && wordTimings && wordTimings.length >= 2) {
+      captionsInstalled = await installCaptionsLayer(page, width, height, wordTimings);
+      if (captionsInstalled) {
+        log(`الترجمة الحركية مفعّلة: ${wordTimings.length} كلمة — الطبقة عند 72% من الارتفاع بمنطقة الأمان`);
+        await writeSummary(`**الترجمة الحركية**: مفعّلة — ${wordTimings.length} كلمة متزامنة (مقاطع 3–4 كلمات، تمييز الكلمة المنطوقة، RTL تلقائي للعربية) عند 72% من الارتفاع`);
+      }
+    }
+
     // أمر ffmpeg — الإطارات تُضخ عبر stdin أثناء الالتقاط (بلا ملفات وسيطة)
+    const hasVoice = Boolean(audioPath);
+    const hasBg = Boolean(bgPath);
     const args = ["-y", "-hide_banner", "-loglevel", "error", "-progress", "pipe:1", "-nostats"];
     args.push("-f", "image2pipe", "-framerate", String(fps), "-i", "-");
-    if (audioPath) {
+    if (hasVoice) {
       args.push("-i", audioPath);
+    }
+    if (hasBg) {
+      // حلقة لا نهائية للموسيقى كي تغطي كامل المدة حتى لو كان المقطع أقصر —
+      // المدة النهائية يقصها -t على مدة الفيديو/التعليق
+      args.push("-stream_loop", "-1", "-i", bgPath);
+    }
+    if (hasVoice && hasBg) {
+      // الخلط مع الخفض التلقائي أثناء الكلام: الموسيقى بمستوى منخفض (0.12)
+      // وتُضغط جانبيًا بصوت التعليق (sidechaincompress) ثم تُمزج بلا تطبيع
+      args.push(
+        "-filter_complex",
+        "[1:a]aresample=44100,asplit=2[voice][sc];" +
+          "[2:a]aresample=44100,volume=0.12[music0];" +
+          "[music0][sc]sidechaincompress=threshold=0.05:ratio=10:attack=90:release=650[music];" +
+          "[voice][music]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]",
+      );
+      args.push("-map", "0:v:0", "-map", "[aout]");
+    } else if (hasVoice) {
+      args.push("-map", "0:v:0", "-map", "1:a:0");
+    } else if (hasBg) {
+      // بلا تعليق صوتي — الموسيقى وحدها بمستوى هادئ ثابت
+      args.push("-filter_complex", "[1:a]aresample=44100,volume=0.30[aout]");
+      args.push("-map", "0:v:0", "-map", "[aout]");
     } else {
       args.push("-f", "lavfi", "-t", duration.toFixed(3), "-i", "anullsrc=channel_layout=stereo:sample_rate=44100");
+      args.push("-map", "0:v:0", "-map", "1:a:0");
     }
-    args.push("-map", "0:v:0", "-map", "1:a:0");
     // veryfast: ذاكرة أقل بكثير من medium بنفس الجودة البصرية تقريبًا عند CRF 18
     // (قابل للضبط بـ FFMPEG_X264_PRESET للبيئات الغنية بالذاكرة)
     args.push("-c:v", "libx264", "-crf", "18", "-preset", process.env.FFMPEG_X264_PRESET || "veryfast", "-pix_fmt", "yuv420p", "-r", String(fps));
@@ -268,7 +323,11 @@ async function renderVideo({ html, width, height, fps, duration, wordTimings, au
     let lastPing = -1;
     for (let i = 0; i < frames; i++) {
       const t = (i * duration) / frames; // == i / fps بالضبط
-      await page.evaluate((tt, d) => window.renderAtTime(tt, d, window.__wordTimings), t, duration);
+      await page.evaluate((tt, d) => {
+        window.renderAtTime(tt, d, window.__wordTimings);
+        // تحديث الترجمة الحركية لنفس اللحظة قبل الالتقاط
+        if (window.__mekoUpdateCaptions) window.__mekoUpdateCaptions(tt);
+      }, t, duration);
       // PNG بلا فقد — جودة كاملة على عامل قوي بلا قيود زمن
       const buf = await page.screenshot({ type: "png", captureBeyondViewport: false });
       if (!child.stdin.write(buf)) {
@@ -290,12 +349,17 @@ async function renderVideo({ html, width, height, fps, duration, wordTimings, au
     if (st.size < 20_000) throw new Error(`الناتج صغير بشكل مريب (${st.size} بايت) — رندر فاشل غالبًا`);
 
     // التحقق النهائي بـ ffprobe: الأبعاد والمعدل والمدة ووجود مسار الصوت فعليًا
-    const probe = await probeOutput(outputPath, { width, height, fps, duration, expectAudio: Boolean(audioPath) });
+    const probe = await probeOutput(outputPath, { width, height, fps, duration, expectAudio: Boolean(hasVoice || hasBg) });
+    const audioNote = hasVoice && hasBg
+      ? " (التعليق الصوتي مدمج + موسيقى الخلفية مخلوطة مع خفض تلقائي)"
+      : hasVoice
+        ? " (التعليق الصوتي مدمج)"
+        : hasBg
+          ? " (موسيقى الخلفية فقط)"
+          : " (صامت مولّد — بلا تعليق صوتي مطلوب)";
     await writeSummary(
       `**تحقق ffprobe**: ${probe.w}×${probe.h} @ ${probe.fps}fps — ${probe.durationSec.toFixed(2)}s — ` +
-      (probe.hasAudio
-        ? `مسار صوت ${probe.audioCodec}${audioPath ? " (التعليق مدمج)" : " (صامت مولّد — بلا تعليق صوتي مطلوب)"}`
-        : "بلا مسار صوت"),
+      (probe.hasAudio ? `مسار صوت ${probe.audioCodec}${audioNote}` : "بلا مسار صوت"),
     );
 
     fs.copyFileSync(outputPath, PROGRESS_VIDEO_PATH);
@@ -472,6 +536,156 @@ function applyStageTransformInPage(spec) {
     }
   }
   return { naturalW: nw, naturalH: nh, scale: s, mode, count: rects.length };
+}
+
+// ---------------------------------------------------------------------------
+// الترجمة الحركية الموحدة (Kinetic Captions Overlay)
+
+/**
+ * طبقة ترجمة احترافية موحدة فوق أي مشهد — منطقة الأمان لـ YouTube Shorts
+ * (مركزها 72% من الارتفاع، بعيدة عن أزرار YouTube السفلية والجانبية):
+ *  - مقاطع 3–4 كلمات متزامنة من wordTimings، والكلمة المنطوقة حاليًا مميزة
+ *    بلون بارز #38bdf8 والبقية بتدرج شفافية.
+ *  - خلفية نصف شفافة أنيقة (زجاجية) تحفظ قراءة النص فوق أي مشهد.
+ *  - RTL تلقائي للعربية (كشف محارف العربية) مع Noto Sans Arabic، وLTR مع
+ *    Liberation Sans للإنجليزية — الخطان محقونّان مسبقًا بـ injectFonts.
+ * تعيد الدالة true عند نجاح التركيب، وترفع مُحدّثًا لكل إطار
+ * window.__mekoUpdateCaptions(t) يستدعيه حلقة الرندر قبل كل لقطة.
+ */
+async function installCaptionsLayer(page, width, height, wordTimings) {
+  try {
+    const fontSize = Math.round(Math.min(width * 0.05, height * 0.045));
+    const spec = { fontSize, timings: wordTimings };
+    const ok = await page.evaluate(installCaptionsInPage, spec);
+    return ok === true;
+  } catch (e) {
+    log(`الترجمة الحركية تعذرت: ${e instanceof Error ? e.message.slice(0, 160) : String(e).slice(0, 160)}`);
+    return false;
+  }
+}
+
+/** تركيب الطبقة داخل الصفحة — يعمل داخل المتصفح ويُستدعى مرة واحدة */
+function installCaptionsInPage(spec) {
+  try {
+    if (!document.body) return false;
+    if (!document.getElementById("meko-captions")) {
+      const style = document.createElement("style");
+      style.setAttribute("data-meko-captions", "1");
+      style.textContent = [
+        "#meko-captions{position:fixed;left:0;right:0;top:72%;transform:translateY(-50%);",
+        "display:flex;justify-content:center;align-items:center;z-index:2147483647;pointer-events:none;",
+        "padding:0 6vw;text-align:center;}",
+        "#meko-captions .meko-cap-line{display:inline-flex;flex-wrap:wrap;justify-content:center;align-items:center;",
+        "column-gap:.38em;row-gap:.12em;background:rgba(7,11,22,.62);backdrop-filter:blur(4px);",
+        "border:1px solid rgba(255,255,255,.12);border-radius:18px;padding:.42em .95em;max-width:100%;line-height:1.4;}",
+        "#meko-captions .meko-cap-w{font-weight:800;color:#ffffff;opacity:.5;text-shadow:0 2px 10px rgba(0,0,0,.55);white-space:pre-wrap;}",
+        "#meko-captions .meko-cap-w.done{opacity:.9;}",
+        "#meko-captions .meko-cap-w.on{opacity:1;color:#38bdf8;text-shadow:0 2px 16px rgba(56,189,248,.5);}",
+        "#meko-captions[dir='rtl'] .meko-cap-line{font-family:'MekoArabic','Noto Sans Arabic',system-ui,sans-serif;direction:rtl;}",
+        "#meko-captions[dir='ltr'] .meko-cap-line{font-family:'MekoLatin','Liberation Sans',system-ui,sans-serif;direction:ltr;}",
+      ].join("");
+      document.head ? document.head.appendChild(style) : document.body.appendChild(style);
+      const layer = document.createElement("div");
+      layer.id = "meko-captions";
+      layer.style.display = "none";
+      document.body.appendChild(layer);
+    }
+    const layer = document.getElementById("meko-captions");
+    if (!layer) return false;
+    // الحجم متغير CSS على الطبقة يرثه كل السطور والكلمات
+    layer.style.setProperty("--meko-cap-size", `${spec.fontSize}px`);
+
+    // تقسيم التوقيتات إلى مقاطع 3–4 كلمات: مقطع جديد عند اكتمال العدد أو فجوة صمت > 0.9 ثانية
+    const timings = (spec.timings || []).filter((w) => w && Number.isFinite(w.start) && Number.isFinite(w.end) && w.text);
+    const chunks = [];
+    let cur = null;
+    for (const w of timings) {
+      if (!cur || cur.words.length >= 4 || w.start - cur.words[cur.words.length - 1].end > 0.9) {
+        cur = { words: [w], start: w.start, end: w.end };
+        chunks.push(cur);
+      } else {
+        cur.words.push(w);
+        cur.end = w.end;
+      }
+    }
+
+    const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+    window.__mekoUpdateCaptions = function (t) {
+      const lay = document.getElementById("meko-captions");
+      if (!lay) return;
+      let hit = null;
+      for (const c of chunks) {
+        if (t >= c.start - 0.3 && t <= c.end + 0.45) { hit = c; break; }
+      }
+      if (!hit) {
+        // بين المقاطع: أبقِ آخر مقطع ظاهرًا لحظة قصيرة ثم أخفِ
+        lay.style.display = "none";
+        lay.innerHTML = "";
+        return;
+      }
+      const text = hit.words.map((w) => w.text).join(" ");
+      const arabic = /[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/.test(text);
+      lay.dir = arabic ? "rtl" : "ltr";
+      lay.style.display = "flex";
+      const spans = hit.words
+        .map((w) => {
+          const cls = t >= w.start && t < w.end ? "on" : t >= w.end ? "done" : "next";
+          return `<span class="meko-cap-w ${cls}" style="font-size:var(--meko-cap-size,${spec.fontSize}px)">${esc(w.text)}</span>`;
+        })
+        .join("");
+      lay.innerHTML = `<div class="meko-cap-line">${spans}</div>`;
+    };
+    window.__mekoUpdateCaptions(spec.timings && timings.length ? timings[0].start : 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// موسيقى الخلفية — رابط http/data أو توليد Ambient محلي عبر FFmpeg
+
+/**
+ * حل مصدر موسيقى الخلفية:
+ *  - "ambient" / "auto": توليد نغمة هادئة محليًا (وتر ثلاثي بترددات منخفضة مع
+ *    نبض بطيء ومرشح lowpass) بمدة الفيديو — بلا أي شبكة.
+ *  - رابط http(s)/data:audio: تنزيل بنفس مسار الصوت الأساسي (محاولتان + ترويسة متصفح).
+ */
+async function resolveBackgroundMusic(url, durationSec) {
+  if (/^(ambient|auto|true|1)$/i.test(String(url).trim())) {
+    return generateAmbient(Math.max(1, durationSec));
+  }
+  return downloadAudio(url);
+}
+
+/** وتر Ambient خفيف (A2 + C#3 + E3) بنبض بطيء — WAV ستيريو جاهز للخلط */
+async function generateAmbient(durationSec) {
+  const d = Math.ceil(durationSec) + 1;
+  const dest = path.join(os.tmpdir(), `bg-ambient-${JOB_ID}.wav`);
+  await new Promise((resolve, reject) => {
+    const child = spawn(
+      "ffmpeg",
+      [
+        "-y", "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", `sine=frequency=110:duration=${d}`,
+        "-f", "lavfi", "-i", `sine=frequency=220:duration=${d}`,
+        "-f", "lavfi", "-i", `sine=frequency=277.18:duration=${d}`,
+        "-f", "lavfi", "-i", `sine=frequency=329.63:duration=${d}`,
+        "-filter_complex",
+        "[0:a]volume=0.55[a0];[1:a]volume=0.4[a1];[2:a]volume=0.32[a2];[3:a]volume=0.28[a3];" +
+          "[a0][a1][a2][a3]amix=inputs=4:duration=longest,tremolo=f=0.12:d=0.4,lowpass=f=800," +
+          "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.6[out]",
+        "-map", "[out]", "-t", String(d), dest,
+      ],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+    let err = "";
+    child.stderr.on("data", (c) => (err += c.toString()));
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`توليد Ambient فشل (${code}): ${err.slice(-300)}`))));
+  });
+  return dest;
 }
 
 // ---------------------------------------------------------------------------

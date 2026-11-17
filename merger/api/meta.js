@@ -7,8 +7,8 @@
  *
  * الأمان بمعرفة القدرة (capability):
  *  - POST فقط.
- *  - المفتاح مقفول على github_token فقط (قائمة بيضاء ثابتة — لا يمكن كتابة
- *    أي مفتاح آخر عبر هذه النقطة).
+ *  - المفتاح مقفول على قائمة بيضاء ثابتة (github_token للأتمتة الرندر،
+ *    automation_key لبوابة الأتمتة) — لا يمكن كتابة أي مفتاح آخر عبر هذه النقطة.
  *  - op=set يتطلب ترويسة Authorization: Bearer <توكن> مساوية للقيمة المطلوب
  *    تخزينها، مع تحقق فعلي من التوكن ضد GitHub API (يجب أن يملك وصولًا إلى
  *    مستودع الرندر) — فلا يُخزَّن إلا توكن يعمل فعلًا، ولا يستطيع أحد غير
@@ -22,8 +22,8 @@
 
 const { getDb, ensureSchema } = require("../lib/db");
 
-/** المفتاح الوحيد المسموح — توكن إطلاق الرندر الكامل على GitHub Actions */
-const ALLOWED_KEY = "github_token";
+/** المفاتيح المسموحة — توكن إطلاق الرندر + مفتاح بوابة الأتمتة */
+const ALLOWED_KEYS = ["github_token", "automation_key"];
 /** مستودع الرندر العام (meko-renderer) — التحقق أن التوكن يملك وصولًا إليه
  *  (env override للاختبار المحلي) */
 const RENDER_REPO = String(process.env.GH_RENDER_REPO || "mohamedfared4444/meko-renderer");
@@ -44,8 +44,8 @@ module.exports = async (req, res) => {
 
   const op = String(body.op || req.query.op || "check");
   const key = String(body.key || "");
-  if (key !== ALLOWED_KEY) {
-    return send(res, 403, { error: `المفتاح مقفول على "${ALLOWED_KEY}" فقط — رفض ${key ? `"${key}"` : "المفتاح الفارغ"}` });
+  if (!ALLOWED_KEYS.includes(key)) {
+    return send(res, 403, { error: `المفاتيح المسموحة: ${ALLOWED_KEYS.join("، ")} — رفض ${key ? `"${key}"` : "المفتاح الفارغ"}` });
   }
 
   try {
@@ -76,15 +76,18 @@ async function handleSet(req, res, body) {
     return send(res, 403, { error: "الترويسة Bearer لا تطابق القيمة المطلوب تخزينها — رفض" });
   }
 
-  // تحقق فعلي ضد GitHub API: التوكن صالح وله وصول إلى مستودع الرندر
-  const valid = await validateGitHubToken(value, RENDER_REPO);
-  if (!valid) {
-    return send(res, 400, {
-      error: `التوكن فشل تحقق GitHub (لا يعمل أو بلا وصول إلى ${RENDER_REPO}) — تأكد من صلاحية repo/Actions وأعد المحاولة`,
-    });
+  // تحقق فعلي ضد GitHub API — للتوكن فقط (يجب أن يملك وصولًا إلى مستودع الرندر)؛
+  // مفتاح الأتمتة سر منفصل بلا تحقق GitHub — إثبات الملكية بالترويسة يكفي
+  if (key === "github_token") {
+    const valid = await validateGitHubToken(value, RENDER_REPO);
+    if (!valid) {
+      return send(res, 400, {
+        error: `التوكن فشل تحقق GitHub (لا يعمل أو بلا وصول إلى ${RENDER_REPO}) — تأكد من صلاحية repo/Actions وأعد المحاولة`,
+      });
+    }
   }
 
-  // الكتابة في جدول meta المشترك (نفس قاعدة Meko — يقرأها getMeta("github_token"))
+  // الكتابة في جدول meta المشترك (نفس قاعدة Meko — يقرأها getMeta(key))
   await ensureSchema();
   const db = getDb();
   await db.execute({
@@ -92,15 +95,18 @@ async function handleSet(req, res, body) {
   });
   await db.execute({
     sql: `INSERT INTO meta (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-    args: [ALLOWED_KEY, value],
+    args: [key, value],
   });
 
   return send(res, 200, {
     ok: true,
-    key: ALLOWED_KEY,
+    key,
     masked: mask(value),
-    repo: RENDER_REPO,
-    note: "المخزّن — Meko سيقرأه عند إطلاق الرندر الكامل (render_code_video)",
+    ...(key === "github_token" ? { repo: RENDER_REPO } : {}),
+    note:
+      key === "github_token"
+        ? "المخزّن — Meko سيقرأه عند إطلاق الرندر الكامل (render_code_video)"
+        : "المخزّن — بوابة الأتمتة POST /api/automate/video تقرأه عند كل نداء (Authorization: Bearer)",
   });
 }
 

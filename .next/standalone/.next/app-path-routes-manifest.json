@@ -1,0 +1,15 @@
+{
+  "/_global-error/page": "/_global-error",
+  "/_not-found/page": "/_not-found",
+  "/api/automate/video/route": "/api/automate/video",
+  "/api/health/route": "/api/health",
+  "/api/keys/[id]/route": "/api/keys/[id]",
+  "/api/keys/route": "/api/keys",
+  "/api/route": "/api",
+  "/api/status/route": "/api/status",
+  "/api/tasks/create/route": "/api/tasks/create",
+  "/api/tasks/rerender/route": "/api/tasks/rerender",
+  "/api/tasks/route": "/api/tasks",
+  "/mcp/route": "/mcp",
+  "/page": "/"
+}

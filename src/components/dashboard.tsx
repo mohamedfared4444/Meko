@@ -48,6 +48,11 @@ interface TaskDetail {
   lastNote: string | null;
   /** حزمة النشر الجاهزة (عناوين + وصف + هاشتاغات) — من params_json.seoPack */
   seo: { titles: string[]; description: string; hashtags: string[] } | null;
+  /** الفيديو البرمجي: الناتج النهائي ورابط التحميل واستضافة الرندر والترجمة */
+  videoUrl: string | null;
+  videoDownloadUrl: string | null;
+  renderHost: string | null;
+  captions: boolean;
 }
 
 interface TaskItem {
@@ -110,10 +115,11 @@ const PIPELINE_STAGES: Array<{ id: string; label: string }> = [
   { id: "merge", label: "دمج الفيديو" },
 ];
 
-/** مراحل الفيديو البرمجي — صوت اختياري ثم رندر الإطارات */
+/** مراحل الفيديو البرمجي — صوت وتوقيتات ← رندر سحابي FHD ← جاهز للتحميل */
 const CODE_VIDEO_STAGES: Array<{ id: string; label: string }> = [
-  { id: "audio", label: "التعليق الصوتي" },
-  { id: "render", label: "رندر الإطارات" },
+  { id: "audio", label: "1. الصوت والتوقيتات" },
+  { id: "render", label: "2. الرندر السحابي FHD 30fps" },
+  { id: "ready", label: "3. جاهز للتحميل" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -249,7 +255,7 @@ export default function Dashboard() {
       <NewTaskModal open={newTaskOpen} onOpenChange={setNewTaskOpen} onCreated={handleTaskCreated} />
       {/* الشريط الجانبي — ثابت على الشاشات الكبيرة، Drawer على الموبايل */}
       <aside className="hidden lg:flex w-[400px] shrink-0 flex-col border-e border-white/10 bg-[#0a0b0e]">
-        <SidebarContent keys={keys} onKeysChanged={loadKeys} completed={completed} failed={failed} />
+        <SidebarContent keys={keys} onKeysChanged={loadKeys} completed={completed} failed={failed} onRerender={loadTasks} />
       </aside>
       {drawerOpen && (
         <div className="lg:hidden fixed inset-0 z-50 flex">
@@ -262,7 +268,7 @@ export default function Dashboard() {
             >
               ✕
             </button>
-            <SidebarContent keys={keys} onKeysChanged={loadKeys} completed={completed} failed={failed} />
+            <SidebarContent keys={keys} onKeysChanged={loadKeys} completed={completed} failed={failed} onRerender={loadTasks} />
           </div>
         </div>
       )}
@@ -347,11 +353,13 @@ function SidebarContent({
   onKeysChanged,
   completed,
   failed,
+  onRerender,
 }: {
   keys: KeyItem[];
   onKeysChanged: () => void | Promise<void>;
   completed: TaskItem[];
   failed: TaskItem[];
+  onRerender: () => void | Promise<void>;
 }) {
   const [section, setSection] = useState<"archive" | "keys">("archive");
 
@@ -366,7 +374,7 @@ function SidebarContent({
         </SectionTab>
       </div>
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3 min-h-0">
-        {section === "archive" ? <ArchiveSection completed={completed} failed={failed} /> : <KeysSection keys={keys} onKeysChanged={onKeysChanged} />}
+        {section === "archive" ? <ArchiveSection completed={completed} failed={failed} onRerender={onRerender} /> : <KeysSection keys={keys} onKeysChanged={onKeysChanged} />}
       </div>
     </div>
   );
@@ -465,6 +473,15 @@ function ActiveTaskCard({ task, now: _now }: { task: TaskItem; now: number }) {
               accent={task.detail?.hasAudio}
             />
           )}
+          {isCodeVideo && (
+            <DetailCell
+              label="الاستضافة"
+              value={task.detail?.renderHost === "github-actions" ? "GitHub Actions — FHD 30fps" : task.detail?.renderHost === "vercel" ? "Vercel — رندر سريع" : "meko-renderer"}
+            />
+          )}
+          {isCodeVideo && (
+            <DetailCell label="الترجمة الحركية" value={task.detail?.captions === false ? "معطلة" : "مفعّلة (72%)"} accent={task.detail?.captions !== false} />
+          )}
           {isPipeline && task.detail?.scenesTotal != null && (
             <DetailCell label="صور المشاهد" value={`${task.detail.scenesDone ?? 0} / ${task.detail.scenesTotal}`} accent={task.detail.scenesDone === task.detail.scenesTotal} />
           )}
@@ -528,7 +545,7 @@ function IdleState({ mcpEndpoint }: { mcpEndpoint: string }) {
 // ---------------------------------------------------------------------------
 // الشريط الجانبي — أرشيف المهام المنتهية
 
-function ArchiveSection({ completed, failed }: { completed: TaskItem[]; failed: TaskItem[] }) {
+function ArchiveSection({ completed, failed, onRerender }: { completed: TaskItem[]; failed: TaskItem[]; onRerender: () => void | Promise<void> }) {
   if (completed.length === 0 && failed.length === 0) {
     return (
       <div className="text-center text-muted-foreground text-xs py-10 px-2">
@@ -540,10 +557,10 @@ function ArchiveSection({ completed, failed }: { completed: TaskItem[]; failed: 
   return (
     <>
       {completed.map((t) => (
-        <CompletedCard key={t.id} task={t} />
+        <CompletedCard key={t.id} task={t} onRerender={onRerender} />
       ))}
       {failed.map((t) => (
-        <FailedCard key={t.id} task={t} />
+        <FailedCard key={t.id} task={t} onRerender={onRerender} />
       ))}
     </>
   );
@@ -603,20 +620,79 @@ function SeoPackBlock({ seo }: { seo: NonNullable<TaskDetail["seo"]> }) {
   );
 }
 
-function CompletedCard({ task }: { task: TaskItem }) {
+/** زر إعادة رندر مهمة الفيديو البرمجي — يعيد الإطلاق بنفس الكود والصوت */
+function RerenderButton({ taskId, onDone, small }: { taskId: string; onDone: () => void | Promise<void>; small?: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const rerender = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await fetch("/api/tasks/rerender", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: taskId }),
+      });
+      const j = (await r.json()) as { error?: string };
+      if (!r.ok) {
+        toast.error(j.error ?? "فشل إعادة الرندر");
+        return;
+      }
+      toast.success("أُعيد إطلاق الرندر الكامل FHD على meko-renderer");
+      await onDone();
+    } catch {
+      toast.error("تعذر الاتصال بالخادم");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      onClick={() => void rerender()}
+      disabled={busy}
+      title="إعادة إطلاق الرندر بنفس الكود والصوت"
+      className={`shrink-0 rounded-md border border-primary/40 bg-primary/10 hover:bg-primary/20 text-primary font-semibold transition-colors disabled:opacity-50 ${small ? "px-2 py-0.5 text-[10px]" : "px-2.5 py-1 text-[11px]"}`}
+    >
+      {busy ? "جارٍ الإطلاق…" : "إعادة الرندر"}
+    </button>
+  );
+}
+
+function CompletedCard({ task, onRerender }: { task: TaskItem; onRerender: () => void | Promise<void> }) {
   const httpUrls = task.urls.filter(isHttpUrl);
   const embedded = task.urls.length - httpUrls.length;
+  const isCodeVideo = task.model === CODE_VIDEO_MODEL;
+  const videoUrl = isCodeVideo ? task.detail?.videoUrl ?? httpUrls[0] ?? null : null;
+  const downloadUrl = isCodeVideo ? task.detail?.videoDownloadUrl ?? (videoUrl ? `${videoUrl}?download=1` : null) : null;
   return (
     <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] p-3.5 space-y-2.5">
       <div className="flex items-center gap-2">
         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
         <span className="text-[12px] font-semibold text-emerald-300 truncate flex-1">{modelLabel(task.model)}</span>
+        {isCodeVideo && task.detail?.renderHost === "github-actions" && (
+          <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[9px] font-bold text-emerald-300">FHD 30fps</span>
+        )}
         <span className="text-[10px] text-muted-foreground shrink-0">{sinceText(task.created_at)}</span>
       </div>
       <p className="text-[11px] text-muted-foreground line-clamp-2" title={task.prompt}>
         {task.prompt || "—"}
       </p>
       {task.model === FULL_VIDEO_MODEL && task.detail?.seo && <SeoPackBlock seo={task.detail.seo} />}
+      {isCodeVideo && videoUrl && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <a
+            href={downloadUrl ?? videoUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            download
+            title="تحميل ملف MP4 مباشرة"
+            className="shrink-0 rounded-md border border-emerald-500/40 bg-emerald-500/15 hover:bg-emerald-500/25 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 transition-colors"
+          >
+            تحميل MP4
+          </a>
+          <CopyButton text={videoUrl} label="نسخ رابط الفيديو" />
+          <RerenderButton taskId={task.id} onDone={onRerender} />
+        </div>
+      )}
       {httpUrls.length > 0 && (
         <div className="space-y-1.5">
           {httpUrls.slice(0, 6).map((u, i) => (
@@ -647,7 +723,8 @@ function CompletedCard({ task }: { task: TaskItem }) {
   );
 }
 
-function FailedCard({ task }: { task: TaskItem }) {
+function FailedCard({ task, onRerender }: { task: TaskItem; onRerender: () => void | Promise<void> }) {
+  const isCodeVideo = task.model === CODE_VIDEO_MODEL;
   return (
     <div className="rounded-xl border border-red-500/25 bg-red-500/[0.06] p-3.5 space-y-2">
       <div className="flex items-center gap-2">
@@ -661,6 +738,7 @@ function FailedCard({ task }: { task: TaskItem }) {
       <p className="text-[11px] text-red-300/90 leading-relaxed line-clamp-3" title={task.error ?? ""}>
         {task.error || "سبب غير معروف"}
       </p>
+      {isCodeVideo && <RerenderButton taskId={task.id} onDone={onRerender} small />}
       <p className="text-[10px] text-muted-foreground font-mono" title={task.id}>
         #{shortId(task.id)}
       </p>

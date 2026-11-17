@@ -158,6 +158,14 @@ export interface CodeVideoParams {
   audioDuration?: number;
   /** توقيتات الكلمات من Edge-TTS — تُمرر لـ renderAtTime في كل إطار */
   wordTimings?: WordTiming[];
+  /** طبقة الترجمة الحركية — العامل يفعّلها افتراضيًا (captions=false لإيقافها صراحة) */
+  captions?: boolean;
+  /** موسيقى خلفية هادئة — رابط http(s) أو "ambient" لتوليد نغمة خفيفة على العامل */
+  bgMusicUrl?: string;
+  /** ويب هوك يُنادى من خدمة الدمج عند اكتمال/فشل الرندر — بوابة الأتمتة (n8n) */
+  webhookCallbackUrl?: string;
+  /** مصدر المهمة: web | mcp | automation — للعرض في اللوحة */
+  source?: string;
   videoUrl?: string;
   videoDownloadUrl?: string;
   videoDuration?: number;
@@ -200,11 +208,18 @@ function saveParams(
 export interface CodeVideoInput {
   title: string;
   htmlCode: string;
+  /** نص التعليق الصوتي — عند وجوده يُولّد الصوت أولاً وتزامن الكلمات */
   script?: string;
   voice?: string;
   aspectRatio?: "9:16" | "16:9" | "1:1";
   /** مدة الفيديو الصام فقط — عند وجود script تكون مدة الصوت هي المرجع */
   durationSeconds?: number;
+  /** طبقة الترجمة الحركية — افتراضيًا مفعّلة في العامل، مرر false لإيقافها */
+  captions?: boolean;
+  /** موسيقى خلفية هادئة — رابط http(s) أو "ambient" */
+  bgMusicUrl?: string;
+  /** ويب هوك إشعار الاكتمال — يُنادى POST عند اكتمال/فشل الرندر */
+  webhookCallbackUrl?: string;
 }
 
 /** تحقق وتطبيع مدخلات الفيديو البرمجي — رسائل عربية واضحة عند الخطأ */
@@ -232,6 +247,25 @@ export function buildCodeVideoParams(input: CodeVideoInput): { ok: true; params:
     return { ok: false, error: `❌ script طويل جدًا (${script.length} حرفًا) — الحد ${SCRIPT_MAX} حرفًا (حد التحويل الصوتي نفسه).` };
   }
 
+  // موسيقى الخلفية: رابط http(s) أو "ambient" لتوليد نغمة خفيفة على العامل
+  const bgMusicUrl = (input.bgMusicUrl ?? "").trim();
+  if (bgMusicUrl) {
+    if (bgMusicUrl.length > 600) {
+      return { ok: false, error: "❌ bg_music_url طويل جدًا — الحد 600 حرفًا." };
+    }
+    if (!/^(https?:\/\/|ambient|auto|true|1)$/i.test(bgMusicUrl)) {
+      return { ok: false, error: "❌ bg_music_url يقبل رابط http/https أو الكلمة ambient (توليد نغمة خفيفة تلقائيًا)." };
+    }
+  }
+
+  // ويب هوك الأتمتة: http/https فقط — يُنادى من خدمة الدمج عند الاكتمال/الفشل
+  const webhookCallbackUrl = (input.webhookCallbackUrl ?? "").trim();
+  if (webhookCallbackUrl) {
+    if (webhookCallbackUrl.length > 600 || !/^https?:\/\/.+/i.test(webhookCallbackUrl)) {
+      return { ok: false, error: "❌ webhook_callback_url يجب أن يكون رابط http/https صالحًا (بحد 600 حرفًا)." };
+    }
+  }
+
   const aspectRatio = input.aspectRatio ?? "9:16";
   if (!["9:16", "16:9", "1:1"].includes(aspectRatio)) {
     return { ok: false, error: "❌ aspect_ratio يقبل 9:16 أو 16:9 أو 1:1 فقط." };
@@ -251,6 +285,9 @@ export function buildCodeVideoParams(input: CodeVideoInput): { ok: true; params:
     failCount: 0,
   };
   if (script) params.script = script;
+  if (input.captions === false) params.captions = false; // غير ذلك: العامل يفعّلها افتراضيًا
+  if (bgMusicUrl) params.bgMusicUrl = bgMusicUrl;
+  if (webhookCallbackUrl) params.webhookCallbackUrl = webhookCallbackUrl;
   return { ok: true, params };
 }
 
@@ -333,6 +370,8 @@ async function ensureRender(taskId: string, params: CodeVideoParams, deadline: n
       fps: String(GH_RENDER_FPS),
       ...(params.durationSeconds ? { duration: String(params.durationSeconds) } : {}),
       ...(audioHttp ? { audio_url: audioHttp } : {}),
+      // موسيقى الخلفية عبر مدخل الإطلاق كاحتياط (الأساسي داخل الحمولة المخزنة)
+      ...(params.bgMusicUrl && /^https?:\/\//i.test(params.bgMusicUrl) ? { bg_music_url: params.bgMusicUrl } : {}),
     };
     let payloadStored = false;
     if (mergerConfigured()) {
@@ -345,6 +384,8 @@ async function ensureRender(taskId: string, params: CodeVideoParams, deadline: n
           audio_url: params.audioUrl ?? null,
           word_timings: params.wordTimings ?? null,
           duration_seconds: params.durationSeconds ?? null,
+          captions: params.captions ?? null,
+          bg_music_url: params.bgMusicUrl ?? null,
         });
         inputs.payload_url = stored.payloadUrl;
         payloadStored = true;
@@ -595,5 +636,65 @@ export async function refreshCodeVideoTask(task: TaskRow, onProgress?: (progress
     taskId: task.id,
     progress: fresh?.progress ?? outcome.progress,
     text: `⏳ رندر الفيديو البرمجي قيد العمل — التقدم: ${fresh?.progress ?? outcome.progress}%\n\nتابع بـ get_task كل ~10 ثوانٍ.`,
+  };
+}
+
+/**
+ * إعادة رندر مهمة فيديو برمجي (زر إعادة الرندر في اللوحة أو بوابة الأتمتة):
+ * يصفّر كل حقول الناتج ومعرّف الإطلاق السابق ويحفظ الحالة ثم يدفع آلة الحالات
+ * خطوة كاملة — الصوت والتوقيتات المحفوظة تُعاد الاستفادة منها بلا إعادة توليد،
+ * ويُطلق الرندر الكامل FHD على meko-renderer بمعرّف مهمة دمج جديد.
+ */
+export async function rerenderCodeVideoTask(task: TaskRow, onProgress?: (progress: number, message: string) => Promise<void> | void): Promise<
+  | { kind: "completed"; taskId: string; urls: string[]; text: string }
+  | { kind: "processing"; taskId: string; progress: number; text: string }
+  | { kind: "failed"; taskId: string; text: string }
+  | { kind: "invalid"; text: string }
+> {
+  const params = parseParams(task);
+  if (!params || !params.htmlCode) {
+    return { kind: "invalid", text: "❌ لا يمكن إعادة رندر هذه المهمة — حالة الكود تالفة أو ناقصة في القاعدة." };
+  }
+  if (task.status === "processing") {
+    return { kind: "invalid", text: "❌ المهمة قيد الرندر الآن — انتظر اكتمالها أو فشلها قبل إعادة الإطلاق." };
+  }
+
+  // تصفير الناتج والإطلاق السابق — الصوت والتوقيتات تبقى كما هي
+  delete params.videoUrl;
+  delete params.videoDownloadUrl;
+  delete params.videoDuration;
+  delete params.videoFps;
+  delete params.videoFrames;
+  delete params.videoJobId;
+  delete params.ghJobId;
+  delete params.renderDispatched;
+  delete params.dispatchedAt;
+  delete params.lastError;
+  params.failCount = 0;
+  params.stage = params.audioUrl ? "render" : params.script ? "audio" : "render";
+
+  await saveParams(task.id, params, {
+    status: "processing",
+    progress: params.stage === "render" ? 45 : 5,
+    error_message: null,
+    result_urls_json: null,
+  });
+
+  const outcome = await advanceCodeVideo(task.id, params, PIPELINE_BUDGET_MS, onProgress ?? (() => {}));
+  if (outcome.kind === "completed") {
+    const fresh = (await getTask(task.id))!;
+    return { kind: "completed", taskId: task.id, urls: codeVideoResultUrls(fresh), text: formatCodeVideoCompleted(fresh) };
+  }
+  if (outcome.kind === "failed") {
+    const fresh = (await getTask(task.id))!;
+    const err = (fresh?.error_message ?? outcome.error ?? "").slice(0, 300);
+    return { kind: "failed", taskId: task.id, text: `❌ فشلت إعادة الرندر: ${err}` };
+  }
+  const fresh = (await getTask(task.id))!;
+  return {
+    kind: "processing",
+    taskId: task.id,
+    progress: fresh?.progress ?? outcome.progress,
+    text: `⏳ أُعيد إطلاق الرندر الكامل FHD 30fps على meko-renderer — التقدم: ${fresh?.progress ?? outcome.progress}%`,
   };
 }

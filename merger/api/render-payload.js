@@ -64,6 +64,11 @@ async function handlePost(req, res) {
   if (body?.word_timings != null && !Array.isArray(body.word_timings)) {
     return send(res, 400, { error: "word_timings يجب أن تكون مصفوفة من {start,end,text}" });
   }
+  // موسيقى الخلفية: رابط http(s) أو "ambient" (توليد نغمة خفيفة على العامل)
+  const bgMusic = body?.bg_music_url != null && String(body.bg_music_url).trim() !== "" ? String(body.bg_music_url).trim() : null;
+  if (bgMusic && !/^(https?:\/\/|ambient|auto|true|1)/i.test(bgMusic)) {
+    return send(res, 400, { error: "bg_music_url يجب أن يكون رابط http/https أو الكلمة ambient" });
+  }
 
   // الحمولة تُخزَّن كما هي — العامل يقرأها بحقولها نفسها
   const payload = {
@@ -74,6 +79,10 @@ async function handlePost(req, res) {
     audio_url: body.audio_url || null,
     word_timings: Array.isArray(body.word_timings) ? body.word_timings : null,
     duration_seconds: Number.isFinite(Number(body.duration_seconds)) ? Number(body.duration_seconds) : null,
+    // الترجمة الحركية: العامل يفعّلها افتراضيًا — false هنا يوقفها صراحة
+    captions: typeof body.captions === "boolean" ? body.captions : null,
+    // موسيقى الخلفية: رابط http(s) أو ambient (≤600 حرفًا)
+    bg_music_url: bgMusic ? bgMusic.slice(0, 600) : null,
     source: "meko",
   };
 

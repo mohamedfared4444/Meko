@@ -111,6 +111,11 @@ async function handleProvision(req, res) {
   };
   if (typeof body.audio_url === "string" && body.audio_url) params.audioUrl = body.audio_url;
   if (Array.isArray(body.word_timings) && body.word_timings.length >= 2) params.wordTimings = body.word_timings;
+  // الترجمة الحركية وموسيقى الخلفية — تمرر للعامل عبر الحمولة/المدخلات
+  if (body.captions === false) params.captions = false;
+  if (typeof body.bg_music_url === "string" && body.bg_music_url && /^(https?:\/\/|ambient|auto|true|1)/i.test(body.bg_music_url)) {
+    params.bgMusicUrl = body.bg_music_url.slice(0, 600);
+  }
 
   await ensureSchema();
   await getDb().execute({
@@ -301,6 +306,16 @@ async function handleFinalize(db, req, res, taskId, jobId, task) {
     args: [JSON.stringify([videoUrl]), JSON.stringify(params), taskId],
   });
 
+  // إشعار الأتمتة: ويب هوك POST إلى webhook_callback_url إن كان مسجلًا على
+  // المهمة (بوابة n8n — task_id + status + video_url + title) — قد يعيد
+  // الدمج استجابته بعد الإرسال، فلا يُمنع الناتج على فشل الويب هوك
+  const webhook = await fireAutomationWebhook(params, {
+    task_id: taskId,
+    status: "completed",
+    video_url: videoUrl,
+    title: params.title ?? "",
+  });
+
   return send(res, 200, {
     ok: true,
     task_id: taskId,
@@ -314,6 +329,7 @@ async function handleFinalize(db, req, res, taskId, jobId, task) {
     fps,
     frames,
     host: overrideUrl ? "external" : "meko-manger",
+    ...(webhook ? { webhook } : {}),
   });
 }
 
@@ -343,12 +359,25 @@ async function handleFailed(db, req, res, taskId, jobId) {
     /* جسم اختياري */
   }
   const error = typeof body.error === "string" && body.error.trim() ? body.error.trim().slice(0, 490) : "فشل الرندر على GitHub Actions بلا رسالة.";
+  // نقرأ المهمة أولًا لجلب ويب هوك الأتمتة إن كان مسجلًا في params
+  const task = await loadTask(db, taskId);
   await db.execute({
     sql: `UPDATE tasks SET status = 'failed', error_message = ?, updated_at = datetime('now') WHERE id = ? AND status != 'completed'`,
     args: [error, taskId],
   });
   await db.execute({ sql: `DELETE FROM output_chunks WHERE job_id = ?`, args: [jobId] });
-  return send(res, 200, { ok: true, status: "failed" });
+  // إشعار فشل الأتمتة — كي يتعامل معه n8n (إعادة محاولة أو تنبيه)
+  let webhook = null;
+  if (task && typeof task.params.webhookCallbackUrl === "string" && /^https?:\/\//i.test(task.params.webhookCallbackUrl)) {
+    webhook = await fireAutomationWebhook(task.params, {
+      task_id: taskId,
+      status: "failed",
+      video_url: null,
+      title: task.params.title ?? "",
+      error: error.slice(0, 300),
+    });
+  }
+  return send(res, 200, { ok: true, status: "failed", ...(webhook ? { webhook } : {}) });
 }
 
 // ---------------------------------------------------------------------------
@@ -377,6 +406,29 @@ function publicBase(req) {
   const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:8787";
   const proto = req.headers["x-forwarded-proto"] || (String(host).startsWith("localhost") || String(host).startsWith("127.") ? "http" : "https");
   return `${proto}://${host}`;
+}
+
+/**
+ * إشعار الأتمتة — POST JSON إلى webhook_callback_url المسجل في params المهمة
+ * (بوابة n8n). مهلة 10 ثوانٍ، والنتيجة تُعاد في استجابة الدمج (sent/failed)
+ * دون أن تُفشل عملية النشر نفسها.
+ */
+async function fireAutomationWebhook(params, payload) {
+  const url = typeof params.webhookCallbackUrl === "string" && /^https?:\/\//i.test(params.webhookCallbackUrl) ? params.webhookCallbackUrl.trim() : null;
+  if (!url || url.length > 600) return null;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": "meko-manger-webhook/1" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10_000),
+    });
+    console.log(`[render-complete] automation webhook ${res.status} → ${url.slice(0, 120)}`);
+    return res.ok ? "sent" : `failed-http-${res.status}`;
+  } catch (e) {
+    console.error(`[render-complete] automation webhook فشل: ${e instanceof Error ? e.message.slice(0, 160) : String(e)}`);
+    return "failed";
+  }
 }
 
 function send(res, status, obj) {

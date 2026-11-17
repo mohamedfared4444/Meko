@@ -30,6 +30,10 @@ on:
         description: "رابط الصوت MP3/WAV (اختياري — يحدد مدة الفيديو عند وجوده)"
         required: false
         type: string
+      bg_music_url:
+        description: "موسيقى خلفية هادئة (اختياري — رابط http أو \"ambient\" لتوليد نغمة خفيفة محليًا، تُخلط مع خفض تلقائي أثناء الكلام)"
+        required: false
+        type: string
       word_timings_json:
         description: "توقيتات الكلمات JSON (اختياري — للأكواد الصغيرة؛ الكبيرة عبر payload_url)"
         required: false
@@ -73,6 +77,7 @@ jobs:
       INPUT_PAYLOAD_URL: ${{ github.event.inputs.payload_url }}
       INPUT_HTML_CODE_B64: ${{ github.event.inputs.html_code_b64 }}
       INPUT_AUDIO_URL: ${{ github.event.inputs.audio_url }}
+      INPUT_BG_MUSIC_URL: ${{ github.event.inputs.bg_music_url }}
       INPUT_WORD_TIMINGS_JSON: ${{ github.event.inputs.word_timings_json }}
       INPUT_WIDTH: ${{ github.event.inputs.width }}
       INPUT_HEIGHT: ${{ github.event.inputs.height }}
@@ -93,10 +98,26 @@ jobs:
         with:
           node-version: "20"
 
-      - name: فحص FFmpeg وتثبيت الاعتماديات
+      # تخزين الاعتماديات وثنائيات المتصفح الاحتياطية مؤقتًا — التجهيز يهبط من
+      # ~20 ثانية تثبيت إلى <15 ثانية استرجاع في كل تشغيل متكرر
+      - name: استرجاع الاعتماديات من الكاش (node_modules + كروم الاحتياطي)
+        uses: actions/cache@v4
+        id: deps-cache
+        with:
+          path: |
+            node_modules
+            /tmp/chrome
+          key: render-deps-${{ runner.os }}-${{ hashFiles('package.json') }}-v2
+
+      - name: فحص FFmpeg وتثبيت الاعتماديات (عند غياب الكاش)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: |
           ffmpeg -version | head -1 || { sudo apt-get update && sudo apt-get install -y ffmpeg; }
           npm install --no-save --no-audit --no-fund puppeteer-core@23 @libsql/client@0.18
+
+      - name: تأكيد الاعتماديات (عند إصابة الكاش)
+        if: steps.deps-cache.outputs.cache-hit == 'true'
+        run: node -e "require.resolve('puppeteer-core'); require.resolve('@libsql/client'); console.log('deps cached OK')"
 
       - name: رندر المشهد FHD 30fps ونشر الناتج
         run: node scripts/render-code-video.js

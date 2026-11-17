@@ -231,6 +231,10 @@ export async function mergerStoreRenderPayload(payload: {
   audio_url?: string | null;
   word_timings?: Array<{ start: number; end: number; text: string }> | null;
   duration_seconds?: number | null;
+  /** طبقة الترجمة الحركية — العامل يفعّلها افتراضيًا (إيقاف صريح بـ false) */
+  captions?: boolean | null;
+  /** موسيقى خلفية هادئة — رابط http(s) أو "ambient" لتوليد نغمة خفيفة على العامل */
+  bg_music_url?: string | null;
 }): Promise<{ payloadId: string; payloadUrl: string }> {
   const { status, body } = await mergerFetch(
     "/api/render-payload",
