@@ -61,6 +61,7 @@ module.exports = async (req, res) => {
 // op=set — التحقق من القدرة ثم الكتابة
 
 async function handleSet(req, res, body) {
+  const key = String(body.key || "");
   const value = String(body.value ?? "").trim();
   if (!TOKEN_RE.test(value)) {
     return send(res, 400, { error: "قيمة التوكن غير صالحة — أحرف/أرقام/شرطة سفلية فقط بطول 20–255 (بدون اقتباسات أو مسافات أو أسطر)" });
