@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>From Scratch - Chocolate Factory</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;background:#f4d9a7;overflow:hidden;font-family:Arial,sans-serif;}
+#stage{position:relative;width:720px;height:1280px;overflow:hidden;background:#f4d9a7;}
+svg{position:absolute;inset:0;width:720px;height:1280px;display:block;}
+text{font-family:Arial,sans-serif}
+.machine-label{font-weight:900;font-size:27px;fill:#40291d;letter-spacing:1px;}
+.small-label{font-size:17px;font-weight:bold;fill:#5b4231;}
+.blueprint{fill:none;stroke:#38bdf8;stroke-width:7;stroke-dasharray:15 12;opacity:.7;}
+.solid{stroke:#573a29;stroke-width:7;stroke-linejoin:round;}
+</style>
+</head>
+<body>
+<div id="stage">
+<svg id="factory" viewBox="0 0 720 1280" xmlns="http://www.w3.org/2000/svg">
+<defs>
+ <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+  <stop offset="0" stop-color="#ffecc8"/>
+  <stop offset=".65" stop-color="#f4c47e"/>
+  <stop offset="1" stop-color="#d99b55"/>
+ </linearGradient>
+ <linearGradient id="chocolate" x1="0" y1="0" x2="0" y2="1">
+  <stop offset="0" stop-color="#82401f"/>
+  <stop offset=".5" stop-color="#542311"/>
+  <stop offset="1" stop-color="#30150d"/>
+ </linearGradient>
+ <linearGradient id="butter" x1="0" y1="0" x2="1" y2="1">
+  <stop offset="0" stop-color="#fff2a2"/>
+  <stop offset="1" stop-color="#d99525"/>
+ </linearGradient>
+ <pattern id="floorPattern" width="100" height="35" patternUnits="userSpaceOnUse">
+  <path d="M0 20 L100 20 M25 0 L25 35" stroke="#80532f" stroke-width="3" opacity=".3"/>
+ </pattern>
+</defs>
+
+<g id="world">
+ <rect x="0" y="0" width="4800" height="1280" fill="url(#sky)"/>
+ <g fill="#fff8e9" opacity=".65">
+  <g transform="translate(250 165)"><ellipse cx="0" cy="20" rx="75" ry="22"/><circle cx="-35" cy="0" r="28"/><circle cx="0" cy="-10" r="37"/><circle cx="40" cy="5" r="27"/></g>
+  <g transform="translate(1250 150)"><ellipse cx="0" cy="20" rx="90" ry="22"/><circle cx="-40" cy="0" r="30"/><circle cx="5" cy="-15" r="38"/><circle cx="50" cy="5" r="25"/></g>
+  <g transform="translate(2600 165)"><ellipse cx="0" cy="20" rx="90" ry="22"/><circle cx="-40" cy="0" r="30"/><circle cx="5" cy="-15" r="38"/><circle cx="50" cy="5" r="25"/></g>
+  <g transform="translate(4100 155)"><ellipse cx="0" cy="20" rx="90" ry="22"/><circle cx="-40" cy="0" r="30"/><circle cx="5" cy="-15" r="38"/><circle cx="50" cy="5" r="25"/></g>
+ </g>
+
+ <rect x="0" y="820" width="4800" height="460" fill="#774525"/>
+ <rect x="0" y="820" width="4800" height="460" fill="url(#floorPattern)"/>
+ <path d="M0 820 H4800" stroke="#4e321f" stroke-width="9"/>
+ <rect x="0" y="800" width="4800" height="20" fill="#bd8549"/>
+
+ <path d="M180 745 H4630" stroke="#493b35" stroke-width="30" fill="none"/>
+ <path d="M180 730 H4630" stroke="#c0a08a" stroke-width="8" fill="none"/>
+ <g fill="#8c7770">
+  <circle cx="250" cy="745" r="13"/><circle cx="850" cy="745" r="13"/><circle cx="1450" cy="745" r="13"/><circle cx="2050" cy="745" r="13"/>
+  <circle cx="2650" cy="745" r="13"/><circle cx="3250" cy="745" r="13"/><circle cx="3850" cy="745" r="13"/><circle cx="4450" cy="745" r="13"/>
+ </g>
+
+ <path d="M430 580 H900 V540 H1500 V580 H2100 V540 H2700 V580 H3300 V540 H3900 V580 H4500" fill="none" stroke="#572614" stroke-width="19" stroke-linecap="round"/>
+ <path d="M430 576 H900 V536 H1500 V576 H2100 V536 H2700 V576 H3300 V536 H3900 V576 H4500" fill="none" stroke="#a35b30" stroke-width="5"/>
+
+ <!-- STAGE 1 -->
+ <g id="s1" transform="translate(300 0)">
+  <text x="0" y="210" text-anchor="middle" class="machine-label">01 · HARVEST &amp; FERMENT</text>
+  <g class="blueprint"><rect x="-155" y="340" width="310" height="380" rx="30"/><path d="M-130 450 H130 M-130 550 H130"/><path d="M-100 340 V300 H100 V340"/></g>
+  <g class="solid">
+   <rect x="-155" y="390" width="310" height="330" rx="24" fill="#b57b43"/>
+   <rect x="-125" y="430" width="250" height="225" rx="16" fill="#fff0d1"/>
+   <g>
+    <ellipse cx="-70" cy="490" rx="28" ry="17" fill="#fff8df"/><ellipse cx="0" cy="505" rx="28" ry="17" fill="#fff8df"/><ellipse cx="70" cy="490" rx="28" ry="17" fill="#fff8df"/>
+    <ellipse cx="-55" cy="565" rx="28" ry="17" fill="#743d61"/><ellipse cx="35" cy="570" rx="28" ry="17" fill="#743d61"/><ellipse cx="85" cy="555" rx="28" ry="17" fill="#743d61"/>
+   </g>
+   <rect x="-155" y="655" width="310" height="65" fill="#8b5937"/>
+   <path d="M-100 655 V720 M0 655 V720 M100 655 V720" stroke="#d1a16d" stroke-width="8"/>
+  </g>
+  <g transform="translate(0 310)">
+   <path d="M-60 0 Q-120 -65 -90 -105 Q-25 -155 60 -100 Q105 -45 40 10 Q0 45 -60 0Z" fill="#bd5037" stroke="#673321" stroke-width="7"/>
+   <path d="M-75 -85 Q0 -30 75 -85" fill="none" stroke="#e78b54" stroke-width="8"/>
+  </g>
+  <text x="0" y="775" text-anchor="middle" class="small-label">WHITE PULP → PURPLE BEANS</text>
+ </g>
+
+ <!-- STAGE 2 -->
+ <g id="s2" transform="translate(900 0)">
+  <text x="0" y="210" text-anchor="middle" class="machine-label">02 · DRY &amp; ROAST</text>
+  <g class="blueprint"><rect x="-160" y="390" width="320" height="330" rx="20"/><path d="M-120 390 V320 H120 V390"/></g>
+  <g class="solid">
+   <rect x="-150" y="425" width="300" height="270" rx="28" fill="#d18b45"/>
+   <rect x="-110" y="465" width="220" height="145" rx="20" fill="#49352c"/>
+   <path d="M-80 610 Q-40 540 0 610 Q40 540 80 610" fill="none" stroke="#ed8d32" stroke-width="13"/>
+   <circle cx="-90" cy="665" r="15" fill="#f5ce80"/><circle cx="90" cy="665" r="15" fill="#f5ce80"/>
+  </g>
+  <rect x="-145" y="335" width="290" height="55" rx="12" fill="#b77a3d" stroke="#603b24" stroke-width="6"/>
+  <g fill="#75422a"><ellipse cx="-95" cy="360" rx="15" ry="9"/><ellipse cx="-45" cy="360" rx="15" ry="9"/><ellipse cx="5" cy="360" rx="15" ry="9"/><ellipse cx="55" cy="360" rx="15" ry="9"/><ellipse cx="105" cy="360" rx="15" ry="9"/></g>
+  <g stroke="#f4a62d" stroke-width="9"><path d="M-180 300 L-200 270"/><path d="M0 280 V240"/><path d="M180 300 L200 270"/></g>
+  <text x="0" y="775" text-anchor="middle" class="small-label">SUN-DRIED · SHELL CRACKED</text>
+ </g>
+
+ <!-- STAGE 3 -->
+ <g id="s3" transform="translate(1500 0)">
+  <text x="0" y="210" text-anchor="middle" class="machine-label">03 · WINNOW &amp; GRIND</text>
+  <g class="blueprint"><path d="M-140 350 H140 V690 H-140Z"/><circle cx="0" cy="530" r="100"/><path d="M-100 530 H100"/></g>
+  <g class="solid">
+   <rect x="-145" y="360" width="290" height="330" rx="25" fill="#839b9c"/>
+   <rect x="-100" y="400" width="200" height="120" rx="12" fill="#3d3028"/>
+   <circle cx="0" cy="580" r="83" fill="#6c4b38" stroke="#3c2b23" stroke-width="12"/>
+   <circle cx="0" cy="580" r="58" fill="#a86b38"/>
+   <circle cx="0" cy="580" r="27" fill="#4b2518"/>
+   <path d="M-100 680 H100" stroke="#49352c" stroke-width="14"/>
+  </g>
+  <path d="M-90 705 Q-45 680 0 705 Q45 680 90 705" fill="none" stroke="#572311" stroke-width="16"/>
+  <text x="0" y="775" text-anchor="middle" class="small-label">THICK DARK COCOA LIQUOR</text>
+ </g>
+
+ <!-- STAGE 4 -->
+ <g id="s4" transform="translate(2100 0)">
+  <text x="0" y="210" text-anchor="middle" class="machine-label">04 · HYDRAULIC PRESS</text>
+  <g class="blueprint"><rect x="-150" y="350" width="300" height="370"/><path d="M-110 390 H110 V650 H-110Z"/><path d="M0 300 V430"/></g>
+  <g class="solid">
+   <rect x="-150" y="370" width="300" height="350" rx="25" fill="#82989c"/>
+   <rect x="-105" y="420" width="210" height="180" rx="12" fill="#d9e1dd"/>
+   <rect x="-95" y="440" width="190" height="50" fill="#e4a64c"/>
+   <rect x="-90" y="500" width="180" height="30" fill="#57301d"/>
+   <rect x="-110" y="600" width="220" height="35" fill="#566d71"/>
+   <path d="M-120 655 H120" stroke="#49352c" stroke-width="15"/>
+  </g>
+  <path d="M-115 670 Q-80 715 -45 670" fill="#d9a73d" stroke="#7a4c23" stroke-width="6"/>
+  <path d="M45 670 Q80 715 115 670" fill="#805a46" stroke="#57352a" stroke-width="6"/>
+  <text x="0" y="775" text-anchor="middle" class="small-label">GOLDEN BUTTER + COCOA POWDER</text>
+ </g>
+
+ <!-- STAGE 5 -->
+ <g id="s5" transform="translate(2700 0)">
+  <text x="0" y="210" text-anchor="middle" class="machine-label">05 · MIX &amp; REFINE</text>
+  <g class="blueprint"><rect x="-170" y="370" width="340" height="340" rx="30"/><circle cx="0" cy="540" r="100"/><path d="M0 300 V500"/></g>
+  <g class="solid">
+   <rect x="-170" y="380" width="340" height="320" rx="30" fill="#a9b9b6"/>
+   <path d="M-135 470 Q-100 700 0 680 Q100 700 135 470Z" fill="url(#chocolate)"/>
+   <path d="M0 300 V550" stroke="#566b70" stroke-width="24"/>
+   <path d="M-100 550 L100 550" stroke="#d7e1de" stroke-width="18"/>
+   <circle cx="0" cy="550" r="20" fill="#d7e1de"/>
+   <path d="M-145 650 H145" stroke="#49352c" stroke-width="15"/>
+  </g>
+  <g fill="#fff0d1" stroke="#5d4030" stroke-width="5"><circle cx="-115" cy="340" r="23"/><circle cx="0" cy="320" r="23"/><circle cx="115" cy="340" r="23"/></g>
+  <text x="0" y="775" text-anchor="middle" class="small-label">MILK · SUGAR · BUTTER · LIQUOR</text>
+ </g>
+
+ <!-- STAGE 6 -->
+ <g id="s6" transform="translate(3300 0)">
+  <text x="0" y="210" text-anchor="middle" class="machine-label">06 · STONE CONCHING</text>
+  <g class="blueprint"><rect x="-190" y="400" width="380" height="300" rx="30"/><circle cx="-80" cy="550" r="100"/><circle cx="80" cy="550" r="100"/></g>
+  <g class="solid">
+   <rect x="-190" y="420" width="380" height="280" rx="30" fill="#ad835c"/>
+   <path d="M-160 560 Q-120 680 0 660 Q120 680 160 560" fill="#492114"/>
+   <circle cx="-80" cy="540" r="92" fill="#aab0a5" stroke="#625c50" stroke-width="12"/>
+   <circle cx="80" cy="540" r="92" fill="#aab0a5" stroke="#625c50" stroke-width="12"/>
+   <circle cx="-80" cy="540" r="35" fill="#7a817b"/><circle cx="80" cy="540" r="35" fill="#7a817b"/>
+   <path d="M-80 430 V650 M80 430 V650" stroke="#5a5e59" stroke-width="8"/>
+  </g>
+  <text x="0" y="775" text-anchor="middle" class="small-label">GIANT STONE ROLLERS · HOURS OF SMOOTHING</text>
+ </g>
+
+ <!-- STAGE 7 -->
+ <g id="s7" transform="translate(3900 0)">
+  <text x="0" y="210" text-anchor="middle" class="machine-label">07 · PRECISION TEMPERING</text>
+  <g class="blueprint"><rect x="-160" y="370" width="320" height="350" rx="25"/><path d="M-120 480 H120 M-120 570 H120"/></g>
+  <g class="solid">
+   <rect x="-160" y="370" width="320" height="350" rx="25" fill="#869da1"/>
+   <rect x="-120" y="420" width="240" height="220" rx="15" fill="#3f302a"/>
+   <path d="M-100 535 Q-50 470 0 535 Q50 470 100 535" fill="none" stroke="#e7ae4b" stroke-width="19"/>
+   <rect x="-105" y="660" width="210" height="25" fill="#526d71"/>
+  </g>
+  <text x="0" y="775" text-anchor="middle" class="small-label">CONTROLLED HEATING &amp; COOLING</text>
+ </g>
+
+ <!-- STAGE 8 -->
+ <g id="s8" transform="translate(4500 0)">
+  <text x="0" y="210" text-anchor="middle" class="machine-label">08 · MOLD &amp; COOL</text>
+  <g class="blueprint"><rect x="-170" y="370" width="340" height="340" rx="25"/><path d="M-140 580 H140"/><rect x="-130" y="600" width="260" height="70"/></g>
+  <g class="solid">
+   <rect x="-170" y="370" width="340" height="330" rx="25" fill="#a5b7b5"/>
+   <rect x="-140" y="600" width="280" height="65" rx="15" fill="#d8b080"/>
+   <g fill="#5a2917" stroke="#36180f" stroke-width="6">
+    <rect x="-110" y="580" width="65" height="45" rx="8"/><rect x="-32" y="580" width="65" height="45" rx="8"/><rect x="46" y="580" width="65" height="45" rx="8"/>
+   </g>
+   <rect x="-130" y="410" width="260" height="135" rx="12" fill="#4a3027"/>
+   <path d="M0 300 V410" stroke="#e3b14d" stroke-width="20"/>
+  </g>
+  <g fill="url(#chocolate)" stroke="#35180e" stroke-width="5">
+   <rect x="-130" y="680" width="70" height="35" rx="8"/><rect x="-35" y="680" width="70" height="35" rx="8"/><rect x="60" y="680" width="70" height="35" rx="8"/>
+  </g>
+  <text x="0" y="775" text-anchor="middle" class="small-label">GLOSSY FINISHED CHOCOLATE BARS</text>
+ </g>
+</g>
+</svg>
+
+<!-- FIXED OVERLAY LAYER (STAYS LOCKED ON SCREEN DURING ZOOM-OUT) -->
+<svg id="overlay" viewBox="0 0 720 1280" xmlns="http://www.w3.org/2000/svg" style="pointer-events:none;background:transparent;">
+ <defs>
+  <clipPath id="lensClip"><circle cx="360" cy="400" r="157"/></clipPath>
+ </defs>
+ <g id="progress">
+  <rect x="115" y="40" width="490" height="90" rx="45" fill="#30231c" opacity=".96" stroke="#9a6b37" stroke-width="4"/>
+  <circle cx="165" cy="85" r="26" fill="none" stroke="#eab54d" stroke-width="5"/>
+  <circle id="ring" cx="165" cy="85" r="26" fill="none" stroke="#ffd36c" stroke-width="5" stroke-dasharray="163.36" stroke-dashoffset="163.36" transform="rotate(-90 165 85)"/>
+  <text x="165" y="91" text-anchor="middle" font-size="14" fill="#fff2d2" font-weight="bold">FS</text>
+  <text x="215" y="96" fill="#fff0d1" font-size="22" font-weight="900" letter-spacing="2">FROM SCRATCH</text>
+  <g id="dashes"></g>
+  <text id="stepText" x="562" y="114" text-anchor="middle" font-size="16" font-weight="bold" fill="#f8d28a">1/8</text>
+ </g>
+
+ <g id="lens" opacity="0">
+  <circle cx="360" cy="400" r="165" fill="#fff0d1" stroke="#1e293b" stroke-width="6"/>
+  <g clip-path="url(#lensClip)">
+   <rect x="195" y="235" width="330" height="330" fill="#fff0d1"/>
+   <g id="lensPress">
+    <text x="360" y="290" text-anchor="middle" font-size="22" font-weight="900" fill="#56351e">COCOA SEPARATION</text>
+    <rect x="235" y="335" width="250" height="105" rx="15" fill="#a8b9b4" stroke="#5a6b6d" stroke-width="8"/>
+    <rect x="260" y="380" width="200" height="22" rx="8" fill="#59301c"/>
+    <g fill="url(#butter)"><path d="M290 420 Q300 450 310 420Z"/><path d="M350 420 Q360 450 370 420Z"/><path d="M410 420 Q420 450 430 420Z"/></g>
+    <text x="360" y="490" text-anchor="middle" fill="#9b661d" font-size="23" font-weight="900">GOLDEN COCOA BUTTER</text>
+    <rect x="265" y="510" width="190" height="36" rx="18" fill="#d8b15e"/>
+    <text x="360" y="535" text-anchor="middle" font-size="18" font-weight="bold" fill="#422b18">SEPARATED</text>
+   </g>
+   <g id="lensCrystal" opacity="0">
+    <text x="360" y="290" text-anchor="middle" font-size="22" font-weight="900" fill="#56351e">TEMPERING CONTROL</text>
+    <rect x="225" y="320" width="270" height="150" rx="20" fill="#60331e"/>
+    <g id="crystalShapes" fill="#f2c65d" stroke="#fff0a8" stroke-width="4"><path d="M270 405 L295 350 L320 405Z"/><path d="M335 405 L360 350 L385 405Z"/><path d="M400 405 L425 350 L450 405Z"/></g>
+    <rect x="245" y="485" width="230" height="45" rx="20" fill="#e8bd59"/>
+    <text x="360" y="515" text-anchor="middle" font-size="20" font-weight="900" fill="#442716">BETA-V CRYSTALS</text>
+   </g>
+  </g>
+  <circle cx="360" cy="400" r="165" fill="none" stroke="#1e293b" stroke-width="6"/>
+  <circle cx="475" cy="515" r="30" fill="#647b80" stroke="#1e293b" stroke-width="6"/>
+  <path d="M490 540 L530 585" stroke="#1e293b" stroke-width="18" stroke-linecap="round"/>
+  <g id="tooWarm" opacity="0"><rect x="215" y="575" width="290" height="55" rx="25" fill="#d83939"/><text x="360" y="612" text-anchor="middle" font-size="25" font-weight="900" fill="white">TOO WARM!</text></g>
+  <g id="snapReady" opacity="0"><rect x="215" y="575" width="290" height="55" rx="25" fill="#d6a43e"/><text x="360" y="612" text-anchor="middle" font-size="25" font-weight="900" fill="#302116">SNAP READY</text></g>
+ </g>
+</svg>
+</div>
+
+<script>
+(function(){
+"use strict";
+const NS="http://www.w3.org/2000/svg";
+const svg=document.getElementById("factory");
+const DURATION=48;
+const CENTERS=[300,900,1500,2100,2700,3300,3900,4500];
+const dashGroup=document.getElementById("dashes");
+for(let i=0;i<8;i++){
+ const r=document.createElementNS(NS,"rect");
+ r.setAttribute("x",215+i*42);r.setAttribute("y",58);r.setAttribute("width",32);r.setAttribute("height",9);r.setAttribute("rx",5);r.setAttribute("fill","#6e5945");r.setAttribute("id","dash"+i);
+ dashGroup.appendChild(r);
+}
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+function smooth(a,b,t){const x=clamp((t-a)/(b-a),0,1);return x*x*(3-2*x);}
+function setOpacity(id,v){document.getElementById(id).setAttribute("opacity",clamp(v,0,1));}
+function setStageVisuals(index,progress){
+ for(let i=1;i<=8;i++){
+  const group=document.getElementById("s"+i);
+  const active=i-1===index;
+  const reveal=clamp((progress-(i-1)*0.125)/0.08,0,1);
+  group.querySelector(".blueprint").setAttribute("opacity",active?1-reveal:0);
+  group.querySelector(".solid").setAttribute("opacity",i-1<index?1:active?reveal:0);
+  group.querySelector(".machine-label").setAttribute("opacity",i-1<=index?1:0.25);
+ }
+}
+function setProgress(index,progress){
+ const completed=clamp(progress*8,0,8);
+ document.getElementById("ring").setAttribute("stroke-dashoffset",163.36*(1-completed/8));
+ for(let i=0;i<8;i++)document.getElementById("dash"+i).setAttribute("fill",i<completed?"#eab54d":"#6e5945");
+ document.getElementById("stepText").textContent=Math.min(index+1,8)+"/8";
+}
+function setLens(stage,stageProgress){
+ const visible=stage===3||stage===6;
+ let visibility=0;
+ if(visible)visibility=stageProgress<.15?smooth(0,.15,stageProgress):stageProgress>.9?1-smooth(.9,1,stageProgress):1;
+ document.getElementById("lens").setAttribute("opacity",visibility);
+ setOpacity("lensPress",stage===3?1:0);
+ setOpacity("lensCrystal",stage===6?1:0);
+ setOpacity("tooWarm",stage===6&&stageProgress>.15&&stageProgress<.45?1:0);
+ setOpacity("snapReady",stage===6&&stageProgress>=.45?1:0);
+ const scale=.75+.25*smooth(.15,.5,stageProgress);
+ document.getElementById("crystalShapes").setAttribute("transform","translate(360 400) scale("+scale+") translate(-360 -400)");
+}
+function renderAtTime(t,duration,wordTimings){
+ duration=Number(duration)||DURATION;
+ t=clamp(Number(t)||0,0,duration);
+ const panEnd=Math.max(duration-4.5,duration*0.88);
+ const stageProgressOverall=clamp(t/panEnd,0,1);
+ const stage=Math.min(7,Math.floor(stageProgressOverall*8));
+ const local=clamp(stageProgressOverall*8-stage,0,1);
+ setStageVisuals(stage,stageProgressOverall);
+ setProgress(stage,stageProgressOverall);
+ setLens(stage,local);
+ const segment=stageProgressOverall*7;
+ const a=Math.min(6,Math.floor(segment));
+ const fraction=segment-a;
+ const cameraCenter=CENTERS[a]+(CENTERS[a+1]-CENTERS[a])*smooth(0,1,fraction);
+ const zoom=smooth(panEnd,duration,t);
+ const viewWidth=720+(4800-720)*zoom;
+ const viewHeight=viewWidth*1280/720;
+ const viewX=(cameraCenter*(1-zoom)+2400*zoom)-viewWidth/2;
+ const viewY=450-viewHeight*0.42;
+ svg.setAttribute("viewBox",[viewX,viewY,viewWidth,viewHeight].join(" "));
+ window.currentWordTimings=wordTimings||[];
+}
+window.renderAtTime=renderAtTime;
+renderAtTime(0,DURATION,[]);
+})();
+</script>
+</body>
+</html>
