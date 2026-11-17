@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { clientIp, createSession, loginRateLimited, pruneLoginLimiter, recordFailedLogin, resolveSecretKey, secretMatch } from "@/lib/auth";
+import { clientIp, createSession, loginRateLimited, recordFailedLogin, resolveSecretKey, secretMatch } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,9 +14,8 @@ export const dynamic = "force-dynamic";
 const COOKIE_MAX_AGE = 7 * 24 * 3600;
 
 export async function POST(req: Request) {
-  pruneLoginLimiter();
   const ip = clientIp(req);
-  if (loginRateLimited(ip)) {
+  if (await loginRateLimited(ip)) {
     return NextResponse.json(
       { error: "محاولات دخول فاشلة كثيرة — حاول مجددًا بعد ربع ساعة." },
       { status: 429 },
@@ -42,7 +41,7 @@ export async function POST(req: Request) {
     );
   }
   if (!secretMatch(password, secret)) {
-    recordFailedLogin(ip);
+    await recordFailedLogin(ip);
     // رسالة عامة فقط — لا تكشف أي تفاصيل عن المفتاح أو طوله
     return NextResponse.json({ error: "كلمة المرور غير صحيحة." }, { status: 401 });
   }

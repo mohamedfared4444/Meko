@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { timingSafeEqual, randomBytes } from "node:crypto";
 import { getMeta, setMeta, deleteMeta, listMetaByPrefix } from "./turso";
-
 /**
  * مصادقة موحدة لكل النقاط الحساسة (المفاتيح، المهام، بوابة الأتمتة):
  *
@@ -155,38 +154,45 @@ export async function requireAccess(req: Request): Promise<NextResponse | null> 
 }
 
 // ---------------------------------------------------------------------------
-// حدّ محاولات الدخول — ذاكرة لكل نسخة خادم (best-effort على serverless)
+// حدّ محاولات الدخول — مخزن في Turso meta كي يعمل عبر كل نسخ serverless
+// (ذاكرة النسخة الواحدة غير كافية: طلبات متتالية قد تهبط على نسخ مختلفة)
 
 const MAX_FAILED_LOGINS = 10;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
-const failedLogins = new Map<string, { count: number; resetAt: number }>();
+const LOGIN_FAIL_PREFIX = "login_fail:";
 
-export function loginRateLimited(ip: string): boolean {
-  const now = Date.now();
-  const entry = failedLogins.get(ip);
-  if (!entry || entry.resetAt <= now) {
-    if (entry) failedLogins.delete(ip);
+interface FailEntry { count: number; resetAt: number }
+
+async function readFailEntry(ip: string): Promise<FailEntry | null> {
+  try {
+    const raw = await getMeta(LOGIN_FAIL_PREFIX + ip);
+    if (!raw) return null;
+    const j = JSON.parse(raw) as FailEntry;
+    if (!j || typeof j.count !== "number" || typeof j.resetAt !== "number") return null;
+    return j;
+  } catch {
+    return null;
+  }
+}
+
+export async function loginRateLimited(ip: string): Promise<boolean> {
+  const e = await readFailEntry(ip);
+  if (!e) return false;
+  if (e.resetAt <= Date.now()) {
+    await deleteMeta(LOGIN_FAIL_PREFIX + ip).catch(() => {});
     return false;
   }
-  return entry.count >= MAX_FAILED_LOGINS;
+  return e.count >= MAX_FAILED_LOGINS;
 }
 
-export function recordFailedLogin(ip: string): void {
+export async function recordFailedLogin(ip: string): Promise<void> {
   const now = Date.now();
-  const entry = failedLogins.get(ip);
-  if (!entry || entry.resetAt <= now) {
-    failedLogins.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+  const e = await readFailEntry(ip);
+  if (!e || e.resetAt <= now) {
+    await setMeta(LOGIN_FAIL_PREFIX + ip, JSON.stringify({ count: 1, resetAt: now + LOGIN_WINDOW_MS } as FailEntry)).catch(() => {});
     return;
   }
-  entry.count += 1;
-}
-
-/** تنظيف دوري بسيط للسجل داخل الذاكرة (يُستدعى من مسار الدخول) */
-export function pruneLoginLimiter(): void {
-  const now = Date.now();
-  for (const [ip, entry] of failedLogins) {
-    if (entry.resetAt <= now) failedLogins.delete(ip);
-  }
+  await setMeta(LOGIN_FAIL_PREFIX + ip, JSON.stringify({ count: e.count + 1, resetAt: e.resetAt } as FailEntry)).catch(() => {});
 }
 
 export function clientIp(req: Request): string {
