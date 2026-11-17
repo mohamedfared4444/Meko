@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>من الصفر | صناعة الزجاج</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:720px;height:1280px;overflow:hidden;background:#101b2a;font-family:Tahoma,Arial,sans-serif;}
+#stage{width:720px;height:1280px;position:relative;overflow:hidden;background:#101b2a;}
+svg{position:absolute;inset:0;width:720px;height:1280px;display:block;}
+#cam{z-index:1;}
+#ui{z-index:2;pointer-events:none;background:transparent;}
+</style>
+</head>
+<body>
+<div id="stage">
+
+<svg id="cam" viewBox="0 0 720 1280" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <linearGradient id="bg" x2="0" y2="1"><stop stop-color="#172b42"/><stop offset="1" stop-color="#26384b"/></linearGradient>
+  <linearGradient id="metal" x2="0" y2="1"><stop stop-color="#7891a7"/><stop offset=".45" stop-color="#344e66"/><stop offset="1" stop-color="#192e42"/></linearGradient>
+  <linearGradient id="glass" x2="1" y2="1"><stop stop-color="#d9f8ff" stop-opacity=".85"/><stop offset=".4" stop-color="#64d9f5" stop-opacity=".4"/><stop offset="1" stop-color="#baf5ff" stop-opacity=".8"/></linearGradient>
+  <linearGradient id="fire" x2="0" y2="1"><stop stop-color="#fff6a1"/><stop offset=".45" stop-color="#ff9c28"/><stop offset="1" stop-color="#e33b14"/></linearGradient>
+  <linearGradient id="sand" x2="0" y2="1"><stop stop-color="#f5d58a"/><stop offset="1" stop-color="#b47a32"/></linearGradient>
+  <linearGradient id="orangeGlass" x2="0" y2="1"><stop stop-color="#ffe49b"/><stop offset=".4" stop-color="#ff9d36"/><stop offset="1" stop-color="#db461b"/></linearGradient>
+  <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#7694ad" stroke-opacity=".13"/></pattern>
+  <filter id="glow"><feGaussianBlur stdDeviation="8" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <clipPath id="lensClip"><circle cx="360" cy="430" r="160"/></clipPath>
+</defs>
+
+<g id="world">
+<rect x="-500" y="-400" width="5500" height="2200" fill="url(#bg)"/>
+<rect x="-500" y="-400" width="5500" height="2200" fill="url(#grid)"/>
+
+<g opacity=".55">
+  <g fill="#234660" stroke="#7294a8" stroke-width="5">
+    <rect x="250" y="160" width="160" height="170"/><rect x="800" y="160" width="160" height="170"/>
+    <rect x="1400" y="160" width="160" height="170"/><rect x="2000" y="160" width="160" height="170"/>
+    <rect x="2600" y="160" width="160" height="170"/><rect x="3200" y="160" width="160" height="170"/>
+    <rect x="3800" y="160" width="160" height="170"/>
+  </g>
+</g>
+
+<!-- INTRO: RAW DESERT SAND -->
+<g id="intro" transform="translate(220 0)">
+  <path d="M-60 760 Q-30 680 30 700 Q100 640 160 700 Q210 680 250 760Z" fill="url(#sand)" stroke="#e5b66a" stroke-width="5"/>
+  <g fill="#eac27d">
+    <circle cx="-10" cy="720" r="5"/><circle cx="25" cy="700" r="4"/><circle cx="65" cy="680" r="5"/>
+    <circle cx="110" cy="700" r="4"/><circle cx="150" cy="715" r="6"/><circle cx="190" cy="735" r="4"/>
+  </g>
+  <g transform="translate(30 520)">
+    <path d="M0 130L0 165H130L130 130" fill="#293c4e" stroke="#a0b4c3" stroke-width="5"/>
+    <path d="M25 130Q10 80 45 50Q65 20 65 0Q105 65 85 130Z" fill="url(#fire)" filter="url(#glow)"/>
+    <path d="M60 130Q45 95 65 65Q90 105 80 130Z" fill="#fff3a4"/>
+  </g>
+  <text x="95" y="420" fill="#ffe0a1" font-size="36" text-anchor="middle" font-weight="bold">رمل السيليكا الخام</text>
+</g>
+
+<!-- FACTORY FLOOR & CONVEYOR -->
+<rect x="450" y="810" width="4050" height="450" fill="#182b3d"/>
+<path d="M450 810H4500" stroke="#7791a5" stroke-width="7"/>
+
+<g id="belt">
+  <rect x="450" y="720" width="4050" height="55" rx="10" fill="#263c50" stroke="#91a8b7" stroke-width="5"/>
+  <path id="beltLine" d="M460 747H4490" stroke="#b6c5cf" stroke-width="5" stroke-dasharray="28 20"/>
+  <g id="rollers" fill="#9bb3c3">
+    <circle cx="520" cy="785" r="15"/><circle cx="720" cy="785" r="15"/><circle cx="920" cy="785" r="15"/>
+    <circle cx="1120" cy="785" r="15"/><circle cx="1320" cy="785" r="15"/><circle cx="1520" cy="785" r="15"/>
+    <circle cx="1720" cy="785" r="15"/><circle cx="1920" cy="785" r="15"/><circle cx="2120" cy="785" r="15"/>
+    <circle cx="2320" cy="785" r="15"/><circle cx="2520" cy="785" r="15"/><circle cx="2720" cy="785" r="15"/>
+    <circle cx="2920" cy="785" r="15"/><circle cx="3120" cy="785" r="15"/><circle cx="3320" cy="785" r="15"/>
+    <circle cx="3520" cy="785" r="15"/><circle cx="3720" cy="785" r="15"/><circle cx="3920" cy="785" r="15"/>
+    <circle cx="4120" cy="785" r="15"/><circle cx="4320" cy="785" r="15"/>
+  </g>
+</g>
+
+<!-- 7 MACHINES -->
+<g id="machines">
+  <!-- STAGE 1 -->
+  <g class="machine" data-stage="1" transform="translate(500 0)">
+    <rect class="blueprint" x="0" y="400" width="350" height="300" rx="15" fill="none" stroke="#0284c7" stroke-width="5" stroke-dasharray="12 10"/>
+    <g class="solid" opacity="0">
+      <rect x="0" y="400" width="350" height="300" rx="15" fill="url(#metal)" stroke="#9db5c4" stroke-width="7"/>
+      <rect x="35" y="445" width="280" height="70" fill="#253d52" stroke="#9bb8c9" stroke-width="5"/>
+      <path d="M40 520L310 520L280 600H70Z" fill="#8e744b" stroke="#d3b57e" stroke-width="4"/>
+      <path d="M70 610Q175 680 280 610" fill="none" stroke="#53c7ed" stroke-width="12"/>
+      <path d="M90 450V510 M175 450V510 M260 450V510" stroke="#d4e9f2" stroke-width="5"/>
+      <text x="175" y="375" fill="#e8f7ff" font-size="30" font-weight="bold" text-anchor="middle">١. الغربلة والغسيل</text>
+    </g>
+  </g>
+
+  <!-- STAGE 2 -->
+  <g class="machine" data-stage="2" transform="translate(1050 0)">
+    <rect class="blueprint" x="0" y="400" width="350" height="300" rx="15" fill="none" stroke="#0284c7" stroke-width="5" stroke-dasharray="12 10"/>
+    <g class="solid" opacity="0">
+      <rect x="0" y="400" width="350" height="300" rx="15" fill="url(#metal)" stroke="#9db5c4" stroke-width="7"/>
+      <path d="M45 480H305L265 640H85Z" fill="#344d60" stroke="#c0d4df" stroke-width="6"/>
+      <path d="M175 430V580" stroke="#dbe9f2" stroke-width="13"/>
+      <path d="M115 550L175 580L235 550" fill="none" stroke="#dceaf0" stroke-width="12"/>
+      <path d="M95 610Q175 660 255 610" fill="#c9a45c" opacity=".85"/>
+      <circle cx="90" cy="455" r="17" fill="#f2ce8a"/><circle cx="270" cy="455" r="17" fill="#aeb9b7"/>
+      <text x="175" y="375" fill="#e8f7ff" font-size="30" font-weight="bold" text-anchor="middle">٢. خلط المكونات</text>
+    </g>
+  </g>
+
+  <!-- STAGE 3 -->
+  <g class="machine" data-stage="3" transform="translate(1600 0)">
+    <rect class="blueprint" x="0" y="350" width="370" height="350" rx="15" fill="none" stroke="#0284c7" stroke-width="5" stroke-dasharray="12 10"/>
+    <g class="solid" opacity="0">
+      <rect x="0" y="350" width="370" height="350" rx="18" fill="#283b4b" stroke="#9eacb8" stroke-width="9"/>
+      <rect x="35" y="420" width="300" height="225" rx="25" fill="#160f14" stroke="#f28b38" stroke-width="8"/>
+      <path d="M60 610Q90 470 155 560Q210 440 260 560Q310 470 320 610Z" fill="url(#fire)" filter="url(#glow)"/>
+      <path d="M70 640Q180 600 300 640" stroke="#ffbd60" stroke-width="10"/>
+      <text x="185" y="325" fill="#ffce88" font-size="30" font-weight="bold" text-anchor="middle">٣. فرن ١٥٠٠ درجة</text>
+    </g>
+  </g>
+
+  <!-- STAGE 4 -->
+  <g class="machine" data-stage="4" transform="translate(2150 0)">
+    <rect class="blueprint" x="0" y="400" width="350" height="300" rx="15" fill="none" stroke="#0284c7" stroke-width="5" stroke-dasharray="12 10"/>
+    <g class="solid" opacity="0">
+      <rect x="0" y="400" width="350" height="300" rx="15" fill="url(#metal)" stroke="#a7bdcc" stroke-width="7"/>
+      <rect x="35" y="465" width="280" height="175" rx="20" fill="#321e20" stroke="#ff9d43" stroke-width="7"/>
+      <path d="M50 580Q175 545 300 580" fill="none" stroke="#ff983a" stroke-width="35"/>
+      <g fill="#ffe4b5"><circle cx="100" cy="545" r="10"/><circle cx="150" cy="525" r="7"/><circle cx="195" cy="550" r="12"/><circle cx="245" cy="530" r="8"/></g>
+      <text x="175" y="375" fill="#e8f7ff" font-size="30" font-weight="bold" text-anchor="middle">٤. تنقية الزجاج</text>
+    </g>
+  </g>
+
+  <!-- STAGE 5 -->
+  <g class="machine" data-stage="5" transform="translate(2700 0)">
+    <rect class="blueprint" x="0" y="420" width="400" height="280" rx="15" fill="none" stroke="#0284c7" stroke-width="5" stroke-dasharray="12 10"/>
+    <g class="solid" opacity="0">
+      <rect x="0" y="420" width="400" height="280" rx="15" fill="url(#metal)" stroke="#b4c6d2" stroke-width="7"/>
+      <rect x="30" y="540" width="340" height="110" rx="12" fill="#b5a7a1"/>
+      <rect x="35" y="520" width="330" height="30" fill="#c6e9ef"/>
+      <path d="M35 510Q200 480 365 510" fill="none" stroke="#e5ffff" stroke-width="15"/>
+      <text x="200" y="390" fill="#e8f7ff" font-size="30" font-weight="bold" text-anchor="middle">٥. حوض القصدير</text>
+    </g>
+  </g>
+
+  <!-- STAGE 6 -->
+  <g class="machine" data-stage="6" transform="translate(3250 0)">
+    <rect class="blueprint" x="0" y="400" width="350" height="300" rx="15" fill="none" stroke="#0284c7" stroke-width="5" stroke-dasharray="12 10"/>
+    <g class="solid" opacity="0">
+      <rect x="0" y="400" width="350" height="300" rx="15" fill="#344a5c" stroke="#b1c3cf" stroke-width="7"/>
+      <rect x="35" y="450" width="280" height="190" rx="12" fill="#192a3a" stroke="#8ba3b6" stroke-width="5"/>
+      <g stroke="#ffb05b" stroke-width="7" fill="none"><path d="M65 490Q95 450 125 490"/><path d="M155 490Q185 450 215 490"/><path d="M245 490Q275 450 305 490"/></g>
+      <path d="M50 585H300" stroke="#a4e5fa" stroke-width="16"/>
+      <text x="175" y="375" fill="#e8f7ff" font-size="30" font-weight="bold" text-anchor="middle">٦. فرن التبريد</text>
+    </g>
+  </g>
+
+  <!-- STAGE 7 -->
+  <g class="machine" data-stage="7" transform="translate(3800 0)">
+    <rect class="blueprint" x="0" y="400" width="380" height="300" rx="15" fill="none" stroke="#0284c7" stroke-width="5" stroke-dasharray="12 10"/>
+    <g class="solid" opacity="0">
+      <rect x="0" y="400" width="380" height="300" rx="15" fill="url(#metal)" stroke="#b4c8d4" stroke-width="7"/>
+      <path d="M45 520H335" stroke="#d8f9ff" stroke-width="20"/>
+      <path d="M190 440V520" stroke="#e7faff" stroke-width="9"/>
+      <path d="M170 500L190 540L210 500" fill="#ff4b4b" filter="url(#glow)"/>
+      <path d="M50 590H330" stroke="#b6e9f8" stroke-width="14"/>
+      <rect x="80" y="565" width="100" height="20" fill="#c7f7ff" opacity=".85"/>
+      <rect x="205" y="565" width="100" height="20" fill="#c7f7ff" opacity=".85"/>
+      <text x="190" y="375" fill="#e8f7ff" font-size="30" font-weight="bold" text-anchor="middle">٧. التقطيع والتلميع</text>
+    </g>
+  </g>
+</g>
+
+<!-- LIVE PRODUCT FLOW ON BELT -->
+<g id="beltItems">
+  <g id="product0"><path d="M0 0L35 -25L75 0L50 25Z" fill="url(#sand)" stroke="#ffe0a1" stroke-width="3"/><circle cx="25" cy="-5" r="4" fill="#fff0bb"/></g>
+  <g id="product1"><circle cx="0" cy="0" r="16" fill="#e4c27e"/><circle cx="25" cy="-7" r="12" fill="#e8d7a7"/><circle cx="48" cy="2" r="14" fill="#d8c9a0"/><circle cx="70" cy="-8" r="10" fill="#fff0cc"/></g>
+  <g id="product2"><path d="M0 0Q20 -30 50 -5Q85 -35 110 0Q100 25 60 20Q20 30 0 0Z" fill="url(#orangeGlass)" stroke="#ffe2a0" stroke-width="4" filter="url(#glow)"/></g>
+  <g id="product3"><rect x="0" y="-12" width="110" height="24" rx="7" fill="url(#glass)" stroke="#e5ffff" stroke-width="3"/><path d="M10 -6L85 -6" stroke="#fff" stroke-width="3"/></g>
+  <g id="product4"><rect x="0" y="-18" width="100" height="36" rx="4" fill="url(#glass)" stroke="#eaffff" stroke-width="3"/><path d="M10 -10L85 -10" stroke="#fff" stroke-width="4"/></g>
+</g>
+
+<!-- FINISHED GLASS PRODUCTS -->
+<g id="finished" opacity="0">
+  <g transform="translate(4210 0)">
+    <rect x="0" y="695" width="130" height="14" rx="5" fill="#bff7ff"/>
+    <path d="M20 615H90L82 695H28Z" fill="url(#glass)" stroke="#e6ffff" stroke-width="5"/>
+    <path d="M155 610H225L215 695H165Z" fill="url(#glass)" stroke="#e6ffff" stroke-width="5"/>
+    <path d="M15 630H95 M150 625H230" stroke="#fff" stroke-width="5" opacity=".8"/>
+  </g>
+</g>
+</g>
+</svg>
+
+<!-- FIXED SCREEN SPACE UI -->
+<svg id="ui" viewBox="0 0 720 1280" xmlns="http://www.w3.org/2000/svg" style="position:absolute;inset:0;pointer-events:none;background:transparent;">
+  <defs>
+    <linearGradient id="uiGold" x2="1" y2="0"><stop stop-color="#ffdc86"/><stop offset="1" stop-color="#e99b35"/></linearGradient>
+    <radialGradient id="lensBg"><stop stop-color="#26384b"/><stop offset="1" stop-color="#0d1c2b"/></radialGradient>
+  </defs>
+
+  <g id="header">
+    <rect x="155" y="38" width="410" height="78" rx="38" fill="#101d2b" stroke="#70899e" stroke-width="3"/>
+    <text x="360" y="88" text-anchor="middle" font-size="32" font-weight="bold" fill="#fff">من الصفر</text>
+    <text id="counter" x="510" y="88" font-size="23" fill="#ffdb8c" text-anchor="middle">0/7</text>
+    <rect x="185" y="123" width="350" height="8" rx="4" fill="#34485b"/>
+    <rect id="progress" x="185" y="123" width="0" height="8" rx="4" fill="url(#uiGold)"/>
+  </g>
+
+  <rect id="lensDim" x="0" y="140" width="720" height="720" fill="#06111c" opacity="0"/>
+
+  <g id="lens" opacity="0">
+    <circle cx="360" cy="430" r="170" fill="#132538" stroke="#b8d8e7" stroke-width="12"/>
+    <g clip-path="url(#lensClip)">
+      <rect x="190" y="260" width="340" height="340" fill="url(#lensBg)"/>
+      <g id="lensHeat" opacity="0">
+        <path d="M200 490Q270 450 320 480Q400 430 520 480V600H200Z" fill="url(#orangeGlass)" filter="url(#glow)"/>
+        <g fill="#ffe8a6"><circle cx="280" cy="455" r="7"/><circle cx="340" cy="440" r="10"/><circle cx="400" cy="465" r="8"/><circle cx="450" cy="430" r="6"/></g>
+      </g>
+      <g id="lensBubbles" opacity="0">
+        <rect x="190" y="480" width="340" height="120" fill="url(#orangeGlass)"/>
+        <g id="bubbleGroup" fill="none" stroke="#fff4d6" stroke-width="5">
+          <circle cx="270" cy="500" r="14"/><circle cx="330" cy="465" r="9"/><circle cx="400" cy="510" r="17"/><circle cx="455" cy="450" r="11"/>
+        </g>
+      </g>
+      <g id="lensClear" opacity="0">
+        <rect x="190" y="260" width="340" height="340" fill="url(#glass)"/>
+        <path d="M230 330L450 330" stroke="#fff" stroke-width="10" opacity=".8"/>
+        <circle cx="360" cy="430" r="90" fill="none" stroke="#eaffff" stroke-width="5"/>
+      </g>
+    </g>
+    <circle cx="360" cy="430" r="170" fill="none" stroke="#d9f6ff" stroke-width="10"/>
+    <path d="M480 550L550 625" stroke="#c6e6f2" stroke-width="24" stroke-linecap="round"/>
+    <path d="M480 550L550 625" stroke="#607e94" stroke-width="10" stroke-linecap="round"/>
+  </g>
+
+  <g id="lensLabel" opacity="0">
+    <rect x="140" y="645" width="440" height="66" rx="28" fill="#142b3d" stroke="#ffd17b" stroke-width="3"/>
+    <text id="lensText" x="360" y="688" text-anchor="middle" font-size="29" font-weight="bold" fill="#fff">انصهار كامل!</text>
+  </g>
+</svg>
+</div>
+
+<script>
+"use strict";
+const BASE_DUR = 49;
+const TIMELINE = [
+  {time:0,  stage:0, camera:0},
+  {time:11.5, stage:1, camera:320},
+  {time:16.0, stage:2, camera:870},
+  {time:21.5, stage:3, camera:1420},
+  {time:26.5, stage:4, camera:1970},
+  {time:30.2, stage:5, camera:2540},
+  {time:34.6, stage:6, camera:3070},
+  {time:38.0, stage:7, camera:3630},
+  {time:44.5, stage:7, camera:3750},
+  {time:49.0, stage:7, camera:0, zoomOut:true}
+];
+const STAGE_TIMES = [11.5, 16.0, 21.5, 26.5, 30.2, 34.6, 38.0];
+const $ = id => document.getElementById(id);
+const clamp = (v,a,b) => Math.max(a,Math.min(b,v));
+const smooth = t => { t = clamp(t,0,1); return t*t*(3-2*t); };
+function interpolate(a,b,t) { return a + (b-a)*t; }
+function segment(t,a,b) { return smooth((t-a)/(b-a)); }
+
+function cameraAtTime(t) {
+  if (t >= 44.5) {
+    const k = smooth((t-44.5)/4.5);
+    const scale = interpolate(1, 0.165, k);
+    const tx = interpolate(-3750, 12, k);
+    const ty = interpolate(0, 410, k);
+    return {x:tx, y:ty, scale:scale};
+  }
+  let current = TIMELINE[0], next = TIMELINE[1];
+  for (let i=0;i<TIMELINE.length-1;i++) {
+    if (t >= TIMELINE[i].time && t < TIMELINE[i+1].time) {
+      current = TIMELINE[i]; next = TIMELINE[i+1]; break;
+    }
+  }
+  const p = smooth((t-current.time)/(next.time-current.time));
+  return {x: -interpolate(current.camera, next.camera, p), y:0, scale:1};
+}
+
+function updateMachines(t) {
+  document.querySelectorAll(".machine").forEach(machine => {
+    const stage = Number(machine.dataset.stage);
+    const start = STAGE_TIMES[stage-1];
+    const p = segment(t, start, start+1.4);
+    machine.querySelector(".blueprint").style.opacity = String(1-p);
+    machine.querySelector(".solid").style.opacity = String(p);
+  });
+}
+
+const ITEMS = [
+  {id:"product0", start:1, end:16},
+  {id:"product1", start:15, end:22},
+  {id:"product2", start:22, end:30},
+  {id:"product3", start:30, end:38},
+  {id:"product4", start:38, end:49}
+];
+
+function updateProducts(t) {
+  ITEMS.forEach(item => {
+    const el = $(item.id);
+    const p = clamp((t-item.start)/(item.end-item.start),0,1);
+    const x = interpolate(480, 4150, p);
+    el.setAttribute("transform", `translate(${x} 712)`);
+    el.style.opacity = (p <= 0 || p >= 1) ? "0" : "1";
+  });
+  $("finished").style.opacity = String(segment(t, 40, 44));
+}
+
+function updateBelt(t) {
+  $("beltLine").setAttribute("stroke-dashoffset", String(-t*95));
+  const circles = $("rollers").children;
+  for (let i=0;i<circles.length;i++) {
+    circles[i].setAttribute("cy", 785 + Math.sin((t*4)+i)*2);
+  }
+}
+
+function updateLens(t) {
+  const inside = (t>=21.5 && t<=30.2);
+  $("lens").style.opacity = inside ? "1" : "0";
+  $("lensDim").style.opacity = inside ? ".48" : "0";
+  $("lensLabel").style.opacity = inside ? "1" : "0";
+  $("lensHeat").style.opacity = (t>=21.5 && t<26.5) ? "1" : "0";
+  $("lensBubbles").style.opacity = (t>=26.5 && t<29.0) ? "1" : "0";
+  $("lensClear").style.opacity = (t>=29.0 && t<=30.2) ? "1" : "0";
+  if (t>=21.5 && t<26.5) { $("lensText").textContent = "١٥٠٠°C انصهار كامل!"; $("lensText").setAttribute("fill","#ffdf9b"); }
+  if (t>=26.5 && t<29.0) { $("lensText").textContent = "طرد فقاعات الهواء!"; $("lensText").setAttribute("fill","#ff7272"); }
+  if (t>=29.0 && t<=30.2) { $("lensText").textContent = "زجاج نقي ١٠٠%!"; $("lensText").setAttribute("fill","#8dffb4"); }
+  const p = clamp((t-26.5)/2.5,0,1);
+  const circles = $("bubbleGroup").children;
+  for (let i=0;i<circles.length;i++) {
+    const initialY = [500,465,510,450][i];
+    circles[i].setAttribute("cy", initialY - p*110);
+    circles[i].style.opacity = String(1 - p*0.95);
+  }
+}
+
+function updateUI(t) {
+  let stage = 0;
+  for (let i=0;i<STAGE_TIMES.length;i++) if (t>=STAGE_TIMES[i]) stage=i+1;
+  stage = clamp(stage,0,7);
+  $("counter").textContent = stage + "/7";
+  $("progress").setAttribute("width", 350*(stage/7));
+}
+
+window.renderAtTime = function(t, duration, wordTimings) {
+  const dur = Number(duration) || BASE_DUR;
+  const st = clamp(Number(t)||0, 0, dur) * (BASE_DUR / dur);
+  const camera = cameraAtTime(st);
+  $("world").setAttribute("transform", `translate(${camera.x} ${camera.y}) scale(${camera.scale})`);
+  updateMachines(st);
+  updateProducts(st);
+  updateBelt(st);
+  updateLens(st);
+  updateUI(st);
+};
+window.renderAtTime(0, BASE_DUR, []);
+</script>
+</body>
+</html>
