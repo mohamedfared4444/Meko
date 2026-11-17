@@ -13,8 +13,8 @@ export const maxDuration = 60;
  *
  * POST /api/automate/video
  *   Authorization: Bearer <API_KEY>   — من env AUTOMATION_API_KEY أو meta.automation_key (Turso)
- *   { title, script?, voice?, html_code, captions?, bg_music_url?,
- *     webhook_callback_url?, duration_seconds?, aspect_ratio? }
+ *   { title, script?, voice?, html_code, captions?, caption_style?,
+ *     bg_music_url?, webhook_callback_url?, duration_seconds?, aspect_ratio? }
  *   → تُنشئ المهمة وتولّد الصوت والتوقيتات وتطلق الرندر الكامل FHD 30fps
  *     على meko-renderer تلقائيًا، وعند الاكتمال تُرسل خدمة الدمج إشعار POST
  *     إلى webhook_callback_url: { task_id, status, video_url, title }.
@@ -41,6 +41,9 @@ const bodySchema = z.object({
     .max(150_000, "html_code أطول من الحد (150000 حرفًا).")
     .optional(),
   captions: z.boolean().optional(),
+  // نمط الترجمة الحركية: phrase (مقاطع 2–3 كلمات — افتراضي العامل) أو single-pop
+  // (كلمة واحدة كبيرة منبثقة بلا صندوق: أبيض/ذهبي للطويلة >5 أحرف + نبضة تكبير)
+  caption_style: z.enum(["phrase", "single-pop"]).optional(),
   bg_music_url: z.string().max(600).optional(),
   webhook_callback_url: z.string().url().max(600).optional(),
   duration_seconds: z.number().int().min(3).max(60).optional(),
@@ -131,6 +134,7 @@ export async function POST(req: Request) {
       aspectRatio: body.aspect_ratio,
       durationSeconds: body.duration_seconds,
       captions: body.captions,
+      captionStyle: body.caption_style,
       bgMusicUrl: body.bg_music_url && body.bg_music_url.trim().length > 0 ? body.bg_music_url.trim() : undefined,
       webhookCallbackUrl: body.webhook_callback_url && body.webhook_callback_url.trim().length > 0 ? body.webhook_callback_url.trim() : undefined,
       waitSeconds: LAUNCH_WAIT_SECONDS,

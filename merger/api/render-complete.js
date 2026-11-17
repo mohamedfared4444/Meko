@@ -113,6 +113,7 @@ async function handleProvision(req, res) {
   if (Array.isArray(body.word_timings) && body.word_timings.length >= 2) params.wordTimings = body.word_timings;
   // الترجمة الحركية وموسيقى الخلفية — تمرر للعامل عبر الحمولة/المدخلات
   if (body.captions === false) params.captions = false;
+  if (body.caption_style === "single-pop") params.captionStyle = "single-pop";
   if (typeof body.bg_music_url === "string" && body.bg_music_url && /^(https?:\/\/|ambient|auto|true|1)/i.test(body.bg_music_url)) {
     params.bgMusicUrl = body.bg_music_url.slice(0, 600);
   }

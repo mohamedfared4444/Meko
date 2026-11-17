@@ -81,6 +81,8 @@ async function handlePost(req, res) {
     duration_seconds: Number.isFinite(Number(body.duration_seconds)) ? Number(body.duration_seconds) : null,
     // الترجمة الحركية: العامل يفعّلها افتراضيًا — false هنا يوقفها صراحة
     captions: typeof body.captions === "boolean" ? body.captions : null,
+    // نمط الترجمة الحركية: phrase افتراضي العامل — single-pop كلمة واحدة منبثقة
+    caption_style: body.caption_style === "single-pop" ? "single-pop" : null,
     // موسيقى الخلفية: رابط http(s) أو ambient (≤600 حرفًا)
     bg_music_url: bgMusic ? bgMusic.slice(0, 600) : null,
     source: "meko",

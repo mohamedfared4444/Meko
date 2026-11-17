@@ -160,6 +160,8 @@ export interface CodeVideoParams {
   wordTimings?: WordTiming[];
   /** طبقة الترجمة الحركية — العامل يفعّلها افتراضيًا (captions=false لإيقافها صراحة) */
   captions?: boolean;
+  /** نمط الترجمة: phrase (مقاطع 2–3 كلمات، افتراضي العامل) | single-pop (كلمة واحدة منبثقة) */
+  captionStyle?: "phrase" | "single-pop";
   /** موسيقى خلفية هادئة — رابط http(s) أو "ambient" لتوليد نغمة خفيفة على العامل */
   bgMusicUrl?: string;
   /** ويب هوك يُنادى من خدمة الدمج عند اكتمال/فشل الرندر — بوابة الأتمتة (n8n) */
@@ -216,6 +218,8 @@ export interface CodeVideoInput {
   durationSeconds?: number;
   /** طبقة الترجمة الحركية — افتراضيًا مفعّلة في العامل، مرر false لإيقافها */
   captions?: boolean;
+  /** نمط الترجمة: phrase (افتراضي) | single-pop — كلمة واحدة كبيرة منبثقة بلا صندوق */
+  captionStyle?: "phrase" | "single-pop";
   /** موسيقى خلفية هادئة — رابط http(s) أو "ambient" */
   bgMusicUrl?: string;
   /** ويب هوك إشعار الاكتمال — يُنادى POST عند اكتمال/فشل الرندر */
@@ -286,6 +290,7 @@ export function buildCodeVideoParams(input: CodeVideoInput): { ok: true; params:
   };
   if (script) params.script = script;
   if (input.captions === false) params.captions = false; // غير ذلك: العامل يفعّلها افتراضيًا
+  if (input.captionStyle === "single-pop") params.captionStyle = "single-pop"; // غير ذلك: phrase افتراضي العامل
   if (bgMusicUrl) params.bgMusicUrl = bgMusicUrl;
   if (webhookCallbackUrl) params.webhookCallbackUrl = webhookCallbackUrl;
   return { ok: true, params };
@@ -385,6 +390,7 @@ async function ensureRender(taskId: string, params: CodeVideoParams, deadline: n
           word_timings: params.wordTimings ?? null,
           duration_seconds: params.durationSeconds ?? null,
           captions: params.captions ?? null,
+          caption_style: params.captionStyle ?? null,
           bg_music_url: params.bgMusicUrl ?? null,
         });
         inputs.payload_url = stored.payloadUrl;

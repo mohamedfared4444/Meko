@@ -233,6 +233,8 @@ export async function mergerStoreRenderPayload(payload: {
   duration_seconds?: number | null;
   /** طبقة الترجمة الحركية — العامل يفعّلها افتراضيًا (إيقاف صريح بـ false) */
   captions?: boolean | null;
+  /** نمط الترجمة الحركية — phrase افتراضي العامل، أو single-pop (كلمة واحدة منبثقة) */
+  caption_style?: "phrase" | "single-pop" | null;
   /** موسيقى خلفية هادئة — رابط http(s) أو "ambient" لتوليد نغمة خفيفة على العامل */
   bg_music_url?: string | null;
 }): Promise<{ payloadId: string; payloadUrl: string }> {

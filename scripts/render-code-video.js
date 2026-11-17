@@ -129,18 +129,20 @@ async function main() {
   }
 
   // 3ج) الترجمة الحركية — افتراضيًا مفعّلة (captions !== false) عند وجود توقيتات
+  // النمط: "phrase" مقاطع 2–3 كلمات (افتراضي) | "single-pop" كلمة واحدة منبثقة
   const captionsEnabled = payload.captions !== false;
+  const captionStyle = payload.caption_style === "single-pop" ? "single-pop" : "phrase";
 
   await pingProgress(12);
   await writeSummary(
     `**الرندر الكامل**: ${width}×${height} @ ${fps}fps — ${duration.toFixed(1)}s — ${Math.round(fps * duration)} إطارًا` +
     (audioPath ? " — مع تعليق صوتي" : " — بلا تعليق صوتي") +
     (bgPath ? " — مع موسيقى خلفية (ducking)" : "") +
-    (captionsEnabled && wordTimings ? " — مع الترجمة الحركية" : captionsEnabled ? " — الترجمة الحركية بلا توقيتات (متعطلة)" : " — الترجمة الحركية معطلة (captions=false)"),
+    (captionsEnabled && wordTimings ? ` — مع الترجمة الحركية (نمط ${captionStyle})` : captionsEnabled ? " — الترجمة الحركية بلا توقيتات (متعطلة)" : " — الترجمة الحركية معطلة (captions=false)"),
   );
 
   // 4) الرندر — كل الإطارات بمعدل ثابت حقيقي، بلا أي تخفيض
-  const render = await renderVideo({ html, width, height, fps, duration, wordTimings, audioPath, bgPath, captionsEnabled });
+  const render = await renderVideo({ html, width, height, fps, duration, wordTimings, audioPath, bgPath, captionsEnabled, captionStyle });
   log(`الرندر اكتمل: ${render.frames} إطارًا — ${render.size} بايت — ${((Date.now() - startedAt) / 1000).toFixed(0)} ثانية`);
 
   // 5) النشر: أجزاء إلى meko-manger ثم finalize (يحدّث Turso)
@@ -190,6 +192,7 @@ async function provisionTask(payload) {
         word_timings: payload.word_timings || null,
         bg_music_url: String(process.env.INPUT_BG_MUSIC_URL || payload.bg_music_url || "") || null,
         captions: payload.captions === false ? false : true,
+        caption_style: payload.caption_style === "single-pop" ? "single-pop" : "phrase",
       }),
     },
     30_000,
@@ -223,7 +226,7 @@ async function loadPayload() {
 // ---------------------------------------------------------------------------
 // الرندر
 
-async function renderVideo({ html, width, height, fps, duration, wordTimings, audioPath, bgPath, captionsEnabled }) {
+async function renderVideo({ html, width, height, fps, duration, wordTimings, audioPath, bgPath, captionsEnabled, captionStyle }) {
   const ffmpeg = await ensureFfmpeg();
   const browser = await launchBrowser(width, height);
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codevid-"));
@@ -263,10 +266,11 @@ async function renderVideo({ html, width, height, fps, duration, wordTimings, au
     // الارتفاع) مع تمييز الكلمة المنطوقة ودعم RTL التلقائي للعربية
     let captionsInstalled = false;
     if (captionsEnabled && wordTimings && wordTimings.length >= 2) {
-      captionsInstalled = await installCaptionsLayer(page, width, height, wordTimings);
+      captionsInstalled = await installCaptionsLayer(page, width, height, wordTimings, captionStyle);
       if (captionsInstalled) {
-        log(`الترجمة الحركية مفعّلة: ${wordTimings.length} كلمة — الطبقة عند 72% من الارتفاع بمنطقة الأمان`);
-        await writeSummary(`**الترجمة الحركية**: مفعّلة — ${wordTimings.length} كلمة متزامنة (مقاطع 3–4 كلمات، تمييز الكلمة المنطوقة، RTL تلقائي للعربية) عند 72% من الارتفاع`);
+        const capTop = captionStyle === "single-pop" ? "74%" : "72%";
+        log(`الترجمة الحركية مفعّلة: ${wordTimings.length} كلمة — نمط ${captionStyle} عند ${capTop} من الارتفاع`);
+        await writeSummary(`**الترجمة الحركية**: مفعّلة — ${wordTimings.length} كلمة، نمط ${captionStyle} (تمييز الكلمة المنطوقة، RTL تلقائي للعربية) عند ${capTop} من الارتفاع`);
       }
     }
 
@@ -547,19 +551,32 @@ function applyStageTransformInPage(spec) {
 
 /**
  * طبقة ترجمة احترافية موحدة فوق أي مشهد — منطقة الأمان لـ YouTube Shorts
- * (مركزها 72% من الارتفاع، بعيدة عن أزرار YouTube السفلية والجانبية):
- *  - مقاطع 3–4 كلمات متزامنة من wordTimings، والكلمة المنطوقة حاليًا مميزة
- *    بلون بارز #38bdf8 والبقية بتدرج شفافية.
- *  - خلفية نصف شفافة أنيقة (زجاجية) تحفظ قراءة النص فوق أي مشهد.
+ * (مركزها 72% باصطلاح phrase أو 74% باصطلاح single-pop عبر payload.caption_style):
+ *  - مقاطع 2–3 كلمات متزامنة من wordTimings، والكلمة المنطوقة حاليًا مميزة
+ *    بلون بارز #38bdf8 والبقية بتدرج شفافية. اللاحقات الملتصقة ('s، n't،
+ *    علامات الترقيم) تُدمج بالكلمة السابقة كي لا تظهر كلمات ملتصقة.
+ *  - الحجم يعادل 44px في اصطلاح تصميم 720 (≈6.1% من عرض الكادر النهائي) —
+ *    مريح للعين ولا يبدو سريعًا مع المقاطع القصيرة.
+ *  - خلفية نصف شفافة أنيقة (زجاجية) تحفظ قراءة النص فوق أي مشهد — في نمط
+ *    "single-pop" لا صندوق إطلاقًا: كلمة واحدة وزن 900 و≈78px عند 1080p،
+ *    أبيض #FFFFFF للعادية وذهبي #FACC15 للطويلة (>5 أحرف)، حدود سوداء
+ *    سميكة (stroke ≈4px + paint-order) ونبضة تكبير scale(1.12) تنحل خلال
+ *    أول 120ms من نطق الكلمة.
  *  - RTL تلقائي للعربية (كشف محارف العربية) مع Noto Sans Arabic، وLTR مع
  *    Liberation Sans للإنجليزية — الخطان محقونّان مسبقًا بـ injectFonts.
  * تعيد الدالة true عند نجاح التركيب، وترفع مُحدّثًا لكل إطار
  * window.__mekoUpdateCaptions(t) يستدعيه حلقة الرندر قبل كل لقطة.
  */
-async function installCaptionsLayer(page, width, height, wordTimings) {
+async function installCaptionsLayer(page, width, height, wordTimings, captionStyle) {
   try {
-    const fontSize = Math.round(Math.min(width * 0.05, height * 0.045));
-    const spec = { fontSize, timings: wordTimings };
+    // الحجم يُحسب داخل الصفحة من الـ viewport الفعلي (بعد ملء الكادر) كي
+    // تنطبق النسبة نفسها على كل الاستراتيجيات — انظر installCaptionsInPage
+    const spec = {
+      targetW: width,
+      targetH: height,
+      timings: wordTimings,
+      captionStyle: captionStyle === "single-pop" ? "single-pop" : "phrase",
+    };
     const ok = await page.evaluate(installCaptionsInPage, spec);
     return ok === true;
   } catch (e) {
@@ -580,13 +597,23 @@ function installCaptionsInPage(spec) {
         "display:flex;justify-content:center;align-items:center;z-index:2147483647;pointer-events:none;",
         "padding:0 6vw;text-align:center;}",
         "#meko-captions .meko-cap-line{display:inline-flex;flex-wrap:wrap;justify-content:center;align-items:center;",
-        "column-gap:.38em;row-gap:.12em;background:rgba(7,11,22,.62);backdrop-filter:blur(4px);",
+        "gap:.28em;background:rgba(7,11,22,.62);backdrop-filter:blur(4px);",
         "border:1px solid rgba(255,255,255,.12);border-radius:18px;padding:.42em .95em;max-width:100%;line-height:1.4;}",
         "#meko-captions .meko-cap-w{font-weight:800;color:#ffffff;opacity:.5;text-shadow:0 2px 10px rgba(0,0,0,.55);white-space:pre-wrap;}",
         "#meko-captions .meko-cap-w.done{opacity:.9;}",
         "#meko-captions .meko-cap-w.on{opacity:1;color:#38bdf8;text-shadow:0 2px 16px rgba(56,189,248,.5);}",
         "#meko-captions[dir='rtl'] .meko-cap-line{font-family:'MekoArabic','Noto Sans Arabic',system-ui,sans-serif;direction:rtl;}",
         "#meko-captions[dir='ltr'] .meko-cap-line{font-family:'MekoLatin','Liberation Sans',system-ui,sans-serif;direction:ltr;}",
+        // نمط single-pop — كلمة واحدة ضخمة بلا صندوق: الطبقة أعلى قليلًا (74%)
+        "#meko-captions.pop{top:74%;}",
+        "#meko-captions .meko-cap-pop{display:inline-block;font-weight:900;color:#FFFFFF;",
+        // stroke بالـ em = 4px عند خط 78px (نسبة ثابتة عبر كل الأحجام و dsf)
+        "-webkit-text-stroke:.0513em #0f172a;paint-order:stroke fill;",
+        // ظل بالـ em = 0 6px 14px عند خط 78px
+        "text-shadow:0 .077em .18em rgba(0,0,0,.65);white-space:pre-wrap;}",
+        "#meko-captions .meko-cap-pop.gold{color:#FACC15;}",
+        "#meko-captions[dir='rtl'] .meko-cap-pop{font-family:'MekoArabic','Noto Sans Arabic',system-ui,sans-serif;}",
+        "#meko-captions[dir='ltr'] .meko-cap-pop{font-family:'MekoLatin','Liberation Sans',system-ui,sans-serif;}",
       ].join("");
       document.head ? document.head.appendChild(style) : document.body.appendChild(style);
       const layer = document.createElement("div");
@@ -596,15 +623,43 @@ function installCaptionsInPage(spec) {
     }
     const layer = document.getElementById("meko-captions");
     if (!layer) return false;
+    // النمط: صندوق المقاطع phrase أو الكلمة المنبثقة single-pop
+    const pop = spec.captionStyle === "single-pop";
+    layer.className = pop ? "pop" : "";
+    // الحجم باصطلاح تصميم 720: phrase ≈44px (6.1% من العرض) — single-pop
+    // ≈52px CSS في viewport 720 = 78px فيزيائية عند 1080p (7.22% من العرض).
+    // يُقاس من عرض الـ viewport الفعلي بعد ملء الكادر كي تتطابق النسبة عبر
+    // كل الاستراتيجيات: مشهد 1080 أصلي → 66/78px، ومشهد 720 عبر dsf → 44/52px.
+    const vw = Math.max(320, document.documentElement.clientWidth || spec.targetW || 1080);
+    const fontSize = pop
+      ? Math.max(44, Math.min(120, Math.round(vw * 0.0722)))
+      : Math.max(30, Math.min(88, Math.round(vw * 0.0611)));
     // الحجم متغير CSS على الطبقة يرثه كل السطور والكلمات
-    layer.style.setProperty("--meko-cap-size", `${spec.fontSize}px`);
+    layer.style.setProperty("--meko-cap-size", `${fontSize}px`);
 
-    // تقسيم التوقيتات إلى مقاطع 3–4 كلمات: مقطع جديد عند اكتمال العدد أو فجوة صمت > 0.9 ثانية
     const timings = (spec.timings || []).filter((w) => w && Number.isFinite(w.start) && Number.isFinite(w.end) && w.text);
+
+    // دمج اللاحقات الملتصقة بالكلمة السابقة: التوكن المكون من علامة ترقيم فقط
+    // أو لاحقة انكماشية ('s / n't / 're …) ليس كلمة مستقلة — تظهر في الفيديو
+    // كلمات مثل Here'ssomething إن تُركت منفصلة بلا مسافة صريحة بين الكلمات
+    const SUFFIX_RE = /^(?:[.,!?;:\u2026"'\u2019\u00ab\u00bb()\[\]{}%\-\u2013\u2014]+|n['\u2019]t|['\u2019][a-z]{1,3})$/i;
+    const units = [];
+    for (const w of timings) {
+      const prev = units.length ? units[units.length - 1] : null;
+      if (prev && SUFFIX_RE.test(w.text)) {
+        prev.text += w.text; // لصق اللاحقة بالكلمة السابقة مع مدّ نافذة التمييز
+        prev.end = Math.max(prev.end, w.end);
+      } else {
+        units.push({ text: w.text, start: w.start, end: w.end });
+      }
+    }
+
+    // تقسيم الوحدات إلى مقاطع 2–3 كلمات كحد أقصى: مقطع جديد عند اكتمال العدد
+    // أو فجوة صمت > 0.9 ثانية — مقاطع أقصر = قراءة مريحة لا تبدو سريعة
     const chunks = [];
     let cur = null;
-    for (const w of timings) {
-      if (!cur || cur.words.length >= 4 || w.start - cur.words[cur.words.length - 1].end > 0.9) {
+    for (const w of units) {
+      if (!cur || cur.words.length >= 3 || w.start - cur.words[cur.words.length - 1].end > 0.9) {
         cur = { words: [w], start: w.start, end: w.end };
         chunks.push(cur);
       } else {
@@ -618,6 +673,30 @@ function installCaptionsInPage(spec) {
     window.__mekoUpdateCaptions = function (t) {
       const lay = document.getElementById("meko-captions");
       if (!lay) return;
+      if (pop) {
+        // single-pop: كلمة واحدة فقط — آخر وحدة بدأت عند t أو قبلها، تبقى
+        // ظاهرة حتى تبدأ الوحدة التالية، وتُخفى قبل أول كلمة
+        let wHit = null;
+        for (const w of units) { if (t >= w.start) wHit = w; else break; }
+        if (!wHit) {
+          lay.style.display = "none";
+          lay.innerHTML = "";
+          return;
+        }
+        // نبضة التكبير: scale(1.12) لحظة النطق تنحل خطيًا إلى 1.0 خلال 120ms
+        const dt = Math.max(0, t - wHit.start);
+        const k = Math.max(0, 1 - dt / 0.12);
+        const scale = 1 + 0.12 * k;
+        // ذهبي لامع للكلمات المهمة/الطويلة (>5 أحرف بعد استبعاد الترقيم)
+        const gold = wHit.text.replace(/[^\p{L}\p{N}]/gu, "").length > 5;
+        const arabic = /[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/.test(wHit.text);
+        lay.dir = arabic ? "rtl" : "ltr";
+        lay.style.display = "flex";
+        lay.innerHTML =
+          `<span class="meko-cap-pop${gold ? " gold" : ""}" style="font-size:var(--meko-cap-size,${fontSize}px);` +
+          `transform:scale(${scale.toFixed(4)})">${esc(wHit.text)}</span>`;
+        return;
+      }
       let hit = null;
       for (const c of chunks) {
         if (t >= c.start - 0.3 && t <= c.end + 0.45) { hit = c; break; }
@@ -635,9 +714,11 @@ function installCaptionsInPage(spec) {
       const spans = hit.words
         .map((w) => {
           const cls = t >= w.start && t < w.end ? "on" : t >= w.end ? "done" : "next";
-          return `<span class="meko-cap-w ${cls}" style="font-size:var(--meko-cap-size,${spec.fontSize}px)">${esc(w.text)}</span>`;
+          return `<span class="meko-cap-w ${cls}" style="font-size:var(--meko-cap-size,${fontSize}px)">${esc(w.text)}</span>`;
         })
-        .join("");
+        // مسافة صريحة بين كل كلمة وأخرى — شبكة الأمان إن لم تُطبَّق flex،
+        // وفي flex تعمل gap:.28em على الفصل البصري المنتظم
+        .join(" ");
       lay.innerHTML = `<div class="meko-cap-line">${spans}</div>`;
     };
     window.__mekoUpdateCaptions(spec.timings && timings.length ? timings[0].start : 0);

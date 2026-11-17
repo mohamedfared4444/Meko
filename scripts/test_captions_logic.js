@@ -171,5 +171,90 @@ console.log("الحالة 5: تقسيم 8 كلمات متتالية إلى 3+3+2
   check("المقاطع 3/3/2", JSON.stringify(counts) === "[3,3,2]", JSON.stringify(counts));
 }
 
+// ===== الحالة 6: نمط single-pop عند viewport 1080 =====
+console.log("الحالة 6: single-pop — كلمة واحدة، ذهبي للطويلة، نبضة scale، الحجم 78px");
+{
+  const popRe = /<span class="meko-cap-pop( gold)?" style="font-size:var\(--meko-cap-size,(\d+)px\);transform:scale\(([\d.]+)\)">([^<]+)<\/span>/;
+  const fn = freshDom(1080);
+  const installed = fn({
+    targetW: 1080, targetH: 1920, captionStyle: "single-pop",
+    timings: [
+      { text: "Hi", start: 0, end: 0.5 },
+      { text: "everyone", start: 0.5, end: 1.2 },
+      { text: "look", start: 1.2, end: 1.6 },
+      { text: "brain", start: 1.6, end: 2.2 },
+      { text: "cleaning", start: 2.2, end: 3 },
+    ],
+  });
+  const layer = els.find((e) => e.id === "meko-captions");
+  const styleEl = els.find((e) => e.attrs && e.attrs["data-meko-captions"]);
+  check("التركيب نجح", installed === true);
+  check("الطبقة تحمل صنف pop", layer.className === "pop", layer.className);
+  check("الموضع 74% في CSS", styleEl.textContent.includes("#meko-captions.pop{top:74%;}"));
+  check("حدود سوداء + paint-order في CSS", styleEl.textContent.includes("-webkit-text-stroke:.0513em #0f172a;paint-order:stroke fill;"));
+  check("الذهبي #FACC15 في CSS", styleEl.textContent.includes(".meko-cap-pop.gold{color:#FACC15;}"));
+  check("وزن 900 في CSS", styleEl.textContent.includes(".meko-cap-pop{display:inline-block;font-weight:900;color:#FFFFFF;"));
+  check("بلا صندوق خلفية في CSS", styleEl.textContent.includes("#meko-captions .meko-cap-pop{") && !/\.meko-cap-pop\{[^}]*background/.test(styleEl.textContent));
+  check("صندوق phrase الزجاجي محفوظ للنمط الافتراضي", styleEl.textContent.includes("background:rgba(7,11,22,.62)"));
+  check("الحجم 78px عند viewport 1080", layer.style["__--meko-cap-size"] === "78px", `الفعلي ${layer.style["__--meko-cap-size"]}`);
+
+  // قبل أول كلمة: مخفي
+  globalThis.window.__mekoUpdateCaptions(-0.5);
+  check("الإخفاء قبل أول كلمة", layer.style.display === "none" && layer.innerHTML === "");
+  // لحظة النطق: scale 1.12 + أبيض لكلمة قصيرة
+  globalThis.window.__mekoUpdateCaptions(0);
+  let m = layer.innerHTML.match(popRe);
+  check("نبضة scale(1.12) لحظة البدء", m && m[3] === "1.1200", m && m[3]);
+  check("كلمة قصيرة أبيض (بلا gold)", m && m[1] === undefined && m[4] === "Hi", m && `${m[1]}|${m[4]}`);
+  // بعد 120ms: scale 1.0
+  globalThis.window.__mekoUpdateCaptions(0.13);
+  m = layer.innerHTML.match(popRe);
+  check("العودة إلى scale(1.0) بعد 120ms", m && m[3] === "1.0000", m && m[3]);
+  // كلمة طويلة: ذهبية
+  globalThis.window.__mekoUpdateCaptions(0.7);
+  m = layer.innerHTML.match(popRe);
+  check("الطويلة (>5) ذهبية", m && m[1] === " gold" && m[4] === "everyone", m && `${m[1]}|${m[4]}`);
+  // brain = 5 أحرف بالضبط → أبيض (حد >5)
+  globalThis.window.__mekoUpdateCaptions(1.8);
+  m = layer.innerHTML.match(popRe);
+  check("5 أحرف بالضبط تبقى أبيض", m && m[1] === undefined && m[4] === "brain", m && `${m[1]}|${m[4]}`);
+  // الكلمة تبقى ظاهرة حتى تبدأ التالية (حمل بعد نهايتها)
+  globalThis.window.__mekoUpdateCaptions(2.25);
+  m = layer.innerHTML.match(popRe);
+  check("انتقال للكلمة التالية عند بدئها", m && m[4] === "cleaning" && m[1] === " gold", m && `${m[1]}|${m[4]}`);
+  globalThis.window.__mekoUpdateCaptions(3.5);
+  m = layer.innerHTML.match(popRe);
+  check("الكلمة الأخيرة تبقى بعد انتهائها", m && m[4] === "cleaning");
+  // كلمة واحدة فقط في كل إطار
+  const count = (layer.innerHTML.match(/<span /g) || []).length;
+  check("span واحد فقط في كل إطار", count === 1, `الفعلي ${count}`);
+}
+
+// ===== الحالة 7: single-pop عند viewport 720 (viewport-dsf) =====
+console.log("الحالة 7: single-pop عند viewport 720 — 52px CSS = 78px فيزيائية");
+{
+  const fn = freshDom(720);
+  const installed = fn({ targetW: 1080, targetH: 1920, captionStyle: "single-pop", timings: [
+    { text: "hello", start: 0, end: 0.5 }, { text: "world", start: 0.5, end: 1 },
+  ] });
+  const layer = els.find((e) => e.id === "meko-captions");
+  check("التركيب نجح", installed === true);
+  check("الحجم 52px CSS عند viewport 720", layer.style["__--meko-cap-size"] === "52px", `الفعلي ${layer.style["__--meko-cap-size"]}`);
+}
+
+// ===== الحالة 8: phrase يبقى سليمًا (عدم انكسار النمط الافتراضي) =====
+console.log("الحالة 8: phrase بلا caption_style — السلوك الافتراضي محفوظ");
+{
+  const fn = freshDom(1080);
+  const installed = fn({ targetW: 1080, targetH: 1920, timings: [
+    { text: "alpha", start: 0, end: 0.5 }, { text: "beta", start: 0.5, end: 1 }, { text: "gamma", start: 1, end: 1.5 },
+  ] });
+  const layer = els.find((e) => e.id === "meko-captions");
+  check("التركيب نجح", installed === true);
+  check("الطبقة بلا صنف pop", layer.className === "", layer.className);
+  globalThis.window.__mekoUpdateCaptions(0.2);
+  check("مقاطع phrase كما كانت", /<div class="meko-cap-line"><span class="meko-cap-w /.test(layer.innerHTML));
+}
+
 console.log(`\nالنتيجة: ${pass} ناجح، ${fail} فاشل`);
 process.exit(fail ? 1 : 0);
