@@ -1,0 +1,12 @@
+{
+  "frames": 1819,
+  "fps": 30,
+  "durationSec": 60.63,
+  "renderPhaseSec": 94.7,
+  "encodePhaseSec": 20.2,
+  "totalWallSec": 116.2,
+  "peakChromeRssMB": 1458,
+  "ffmpegRssMB": 345,
+  "mp4SizeMB": 4.32,
+  "mp4": "/home/z/my-project/visual-engine-2/output/meko-visual-engine-2-preview.mp4"
+}
