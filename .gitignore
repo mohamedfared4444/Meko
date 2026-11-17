@@ -1,3 +1,9 @@
 skills/
 node_modules/
 next/
+
+# مخرجات البناء وأدوات الجلسة ومستودع الرندر المستقل
+.next/
+tool-results/
+renderer-repo/
+agent-ctx/
