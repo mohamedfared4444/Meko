@@ -103,6 +103,10 @@ async function main() {
   let duration = Math.max(1, Math.min(MAX_DURATION, Number(process.env.INPUT_DURATION) || Number(payload.duration_seconds) || DEFAULT_DURATION));
   const wordTimings = sanitizeTimings(process.env.INPUT_WORD_TIMINGS_JSON ? JSON.parse(process.env.INPUT_WORD_TIMINGS_JSON) : payload.word_timings);
 
+  // ضمان وجود ffmpeg قبل أي استخدام (قياس مدة الصوت، توليد Ambient، الدمج) —
+  // إن غاب من صورة العامل يُثبّت عبر apt هنا مبكرًا بفشل واضح إن تعذر
+  await ensureFfmpeg();
+
   // 3) الصوت — وجوده يجعل مدته هي المرجع (مزامنة تلقائية)
   const audioUrl = String(process.env.INPUT_AUDIO_URL || payload.audio_url || "").trim() || null;
   let audioPath = null;
