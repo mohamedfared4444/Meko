@@ -27,8 +27,10 @@ print("ok:", out.get("ok"), "| masked:", out.get("masked"), "| note:", out.get("
 with open(KEY_FILE, "w") as f:
     f.write(key + "\n")
 
-# تحقق فوري: البوابة تقبل المفتاح الجديد (GET status بلا task_id يجب أن تعطي 400 وليس 401/503)
-probe = urllib.request.Request(META_URL.replace("/api/meta", "/api/automate/video") + "?task_id=00000000-0000-0000-0000-000000000000")
+# تحقق فوري: البوابة تقبل المفتاح الجديد (مهمة وهمية بمعرف صيغة UUID سليم تعطي 404 وليس 401/503)
+probe = urllib.request.Request(
+    "https://meko-nine.vercel.app/api/automate/video?task_id=00000000-0000-0000-0000-000000000000"
+)
 probe.add_header("Authorization", f"Bearer {key}")
 try:
     with urllib.request.urlopen(probe, timeout=30) as r:

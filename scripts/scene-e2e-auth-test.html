@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<style>
+  html,body{margin:0;padding:0;background:#0b1020;width:1080px;height:1920px;overflow:hidden;
+    font-family:'Noto Sans Arabic',system-ui,sans-serif}
+  #wrap{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:60px}
+  #orb{width:420px;height:420px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, #7dd3fc, #2563eb 55%, #1e3a8a);
+    box-shadow:0 0 120px rgba(59,130,246,.45)}
+  #t1{color:#f8fafc;font-size:76px;font-weight:800}
+  #t2{color:#93c5fd;font-size:44px;font-weight:600}
+  #bar{width:70%;height:26px;border-radius:13px;background:#1e293b;overflow:hidden}
+  #fill{height:100%;width:0%;background:linear-gradient(90deg,#38bdf8,#a78bfa)}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="orb"></div>
+  <div id="t1">اختبار الأتمتة الشاملة</div>
+  <div id="t2">Meko — من الطلب إلى MP4</div>
+  <div id="bar"><div id="fill"></div></div>
+</div>
+<script>
+window.renderAtTime = function (t, duration, wordTimings) {
+  // شريط تقدم زمني ثابت الإيقاع
+  var p = Math.max(0, Math.min(1, t / Math.max(0.001, duration)));
+  document.getElementById('fill').style.width = (p * 100).toFixed(2) + '%';
+  // نبضة الكورة عند نطق كل كلمة — تثبت وصول التوقيتات للمشهد
+  var hit = 0;
+  if (wordTimings && wordTimings.length) {
+    for (var i = 0; i < wordTimings.length; i++) {
+      var w = wordTimings[i];
+      if (t >= w.start && t < w.end) { hit = 1; break; }
+    }
+  }
+  var s = hit ? 1.16 : 1.0;
+  document.getElementById('orb').style.transform = 'scale(' + s.toFixed(4) + ')';
+  document.getElementById('orb').style.filter = hit ? 'brightness(1.35)' : 'brightness(1)';
+};
+</script>
+</body>
+</html>
