@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { bearerOf, resolveSecretKey, secretMatch } from "@/lib/auth";
+import { AUTH_DISABLED, bearerOf, resolveSecretKey, secretMatch } from "@/lib/auth";
 import { runCodeVideo, rerenderCodeVideoTask } from "@/lib/codevideo";
 import { describeDbError, getTask } from "@/lib/turso";
 
@@ -65,8 +65,11 @@ function unauthorized(resolved: boolean) {
 }
 
 export async function POST(req: Request) {
-  const apiKey = await resolveApiKey();
-  if (!apiKey || !secretMatch(bearerOf(req), apiKey)) return unauthorized(Boolean(apiKey));
+  // بوابة الأتمتة مفتوحة مؤقتًا بطلب صاحب المشروع — راجع AUTH_DISABLED في lib/auth
+  if (!AUTH_DISABLED) {
+    const apiKey = await resolveApiKey();
+    if (!apiKey || !secretMatch(bearerOf(req), apiKey)) return unauthorized(Boolean(apiKey));
+  }
 
   let raw: unknown;
   try {
@@ -124,8 +127,11 @@ export async function POST(req: Request) {
 }
 
 export async function GET(req: Request) {
-  const apiKey = await resolveApiKey();
-  if (!apiKey || !secretMatch(bearerOf(req), apiKey)) return unauthorized(Boolean(apiKey));
+  // بوابة الأتمتة مفتوحة مؤقتًا بطلب صاحب المشروع — راجع AUTH_DISABLED في lib/auth
+  if (!AUTH_DISABLED) {
+    const apiKey = await resolveApiKey();
+    if (!apiKey || !secretMatch(bearerOf(req), apiKey)) return unauthorized(Boolean(apiKey));
+  }
 
   const taskId = (new URL(req.url).searchParams.get("task_id") || "").trim();
   if (!taskId) return NextResponse.json({ error: "task_id مطلوب في الاستعلام." }, { status: 400 });

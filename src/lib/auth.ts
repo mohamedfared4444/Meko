@@ -15,6 +15,15 @@ import { getMeta, setMeta, deleteMeta, listMetaByPrefix } from "./turso";
  *    أي NEXT_PUBLIC.
  */
 
+/**
+ * ⚠️ مفتاح تجاوز الحماية — الحماية مؤقتًا متوقفة بطلب صاحب المشروع (2026-11-18).
+ *  الداش بورد ونقاط المهام والمفاتيح وبوابة الأتمتة مفتوحة بلا كلمة مرور.
+ *  لإعادة تفعيل الحماية: اقلب القيمة إلى false وسيستأنف كل شيء عمله فورًا
+ *  (بوابة checkAccess، بوابة /api/automate/video، بوابة /api/auth/status) —
+ *  نفس السطر يتحكم في الثلاثة.
+ */
+export const AUTH_DISABLED = true;
+
 /** اسم كوكي الجلسة */
 export const SESSION_COOKIE = "meko_session";
 /** صلاحية الجلسة: 7 أيام */
@@ -126,6 +135,8 @@ export type AuthCheck = { ok: true } | { ok: false; response: NextResponse };
  * عند عدم ضبط أي مفتاح سري إطلاقًا تعيد 503 كي لا يُفتح المسار بالخطأ.
  */
 export async function checkAccess(req: Request): Promise<AuthCheck> {
+  // تجاوز الحماية — بطلب صاحب المشروع (راجع AUTH_DISABLED فوق)
+  if (AUTH_DISABLED) return { ok: true };
   const secret = await resolveSecretKey();
   if (!secret) {
     return {

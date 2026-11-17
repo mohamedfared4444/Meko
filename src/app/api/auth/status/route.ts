@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { isSessionValid, resolveSecretKey, SESSION_COOKIE } from "@/lib/auth";
+import { AUTH_DISABLED, isSessionValid, resolveSecretKey, SESSION_COOKIE } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,12 +22,14 @@ export async function GET(req: Request) {
   } catch {
     token = rawToken.trim();
   }
-  let authenticated = false;
+  let sessionValid = false;
   try {
-    authenticated = secret !== null && token.length > 0 && (await isSessionValid(token));
+    sessionValid = secret !== null && token.length > 0 && (await isSessionValid(token));
   } catch {
-    authenticated = false;
+    sessionValid = false;
   }
+  // الحماية مؤقتًا متوقفة بطلب صاحب المشروع — الواجهة لا تعرض بوابة الدخول طالما AUTH_DISABLED
+  const authenticated = AUTH_DISABLED || sessionValid;
   return NextResponse.json(
     { authenticated, configured: secret !== null },
     { headers: { "Cache-Control": "no-store" } },
