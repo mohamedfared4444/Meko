@@ -263,6 +263,14 @@ async function ensureAudio(taskId: string, params: CodeVideoParams, deadline: nu
 
   await onProgress(8, "توليد التعليق الصوتي عبر Edge-TTS مع توقيتات الكلمات…");
   const speech = await synthesizeSpeech(params.script, { voice: params.voice, timeoutMs: TTS_TIMEOUT_MS, collectTimings: true });
+  // حراسة: صوت فارغ/شبه فارغ أو بلا مدة يعني فشل التوليد الصامت — يُرفض فورًا
+  // بدل أن يمضي للرندر ويخرج فيديو أخرس يبدو مكتملًا
+  if (!speech.mp3 || speech.mp3.length < 1000) {
+    throw new Error(`الصوت المولّد من Edge-TTS فارغ أو شبه فارغ (${speech.mp3?.length ?? 0} بايت) — أعد المحاولة أو غيّر الصوت`);
+  }
+  if (!(speech.durationSec > 0.5)) {
+    throw new Error(`مدة الصوت المولّد غير صالحة (${speech.durationSec}s) — أعد المحاولة`);
+  }
   const url = await uploadViaHosts(speech.mp3, "audio/mpeg", () => Math.max(0, deadline - Date.now()));
   params.audioUrl = url;
   params.audioDuration = Math.round(speech.durationSec * 100) / 100;
@@ -297,7 +305,12 @@ async function ensureRender(taskId: string, params: CodeVideoParams, deadline: n
 
   const token = await getGitHubToken();
   if (token) {
-    await onProgress(50, "تجهيز الحمولة وإطلاق الرندر الكامل FHD 30fps على GitHub Actions…");
+    // الصوت: روابط http تُمرر أيضًا كمدخل إطلاق (احتياط لو فشل جلب الحمولة)؛
+    // أما الصوت المضمّن (data: — الحل الأخير للرفع) فيمر حصرًا داخل الحمولة
+    // المخزّنة على خدمة الدمج لأن حجمه يجاوز حد مدخلات GitHub (~64KB)
+    const audioHttp = params.audioUrl && /^https?:\/\//i.test(params.audioUrl) ? params.audioUrl : null;
+    const audioInline = params.audioUrl && !audioHttp ? params.audioUrl : null;
+    await onProgress(50, `تجهيز الحمولة وإطلاق الرندر الكامل FHD 30fps على GitHub Actions…${params.audioUrl ? " (مع التعليق الصوتي)" : " (بلا تعليق صوتي)"}`);
     // أبعاد الجودة الكاملة والمعدل الثابت الناعم — يفرضان حتى على المهام القديمة
     // المُنشئة بأبعاد الرندر السريع كي يخرج العامل دائمًا بـ FHD
     const fhd = dimensionsFor(params.aspectRatio, "fhd");
@@ -318,7 +331,7 @@ async function ensureRender(taskId: string, params: CodeVideoParams, deadline: n
       height: String(params.height),
       fps: String(GH_RENDER_FPS),
       ...(params.durationSeconds ? { duration: String(params.durationSeconds) } : {}),
-      ...(params.audioUrl ? { audio_url: params.audioUrl } : {}),
+      ...(audioHttp ? { audio_url: audioHttp } : {}),
     };
     let payloadStored = false;
     if (mergerConfigured()) {
@@ -339,6 +352,16 @@ async function ensureRender(taskId: string, params: CodeVideoParams, deadline: n
       }
     }
     if (!payloadStored) {
+      // الصوت المضمّن (data:) لا يُمرر في مدخلات الإطلاق (يجاوز حد ~64KB ويفشل
+      // الإطلاق كله) — بلا تخزين للحمولة يعني إطلاقًا بلا صوت ينتج فيديو أخرس،
+      // فنُلغي بدل تسليم ناتج خاطئ، وتُعاد المحاولة عند التحديث القادم
+      if (audioInline) {
+        throw new MergerError(
+          "تعذر تخزين حمولة الرندر (الكود + الصوت المضمّن) على خدمة الدمج — إطلاق بلا الصوت ينتج فيديو أخرس فأُلغي. أعد المحاولة، وإن تكررت فالحجم يتجاوز حد خدمة الدمج.",
+          undefined,
+          false,
+        );
+      }
       if (params.htmlCode.length > GH_HTML_B64_LIMIT) {
         throw new MergerError(
           `تعذر تخزين حمولة المشهد على خدمة الدمج وكوده (${params.htmlCode.length} حرفًا) يتجاوز حد مدخلات الإطلاق (${GH_HTML_B64_LIMIT}) — أعد المحاولة لاحقًا.`,

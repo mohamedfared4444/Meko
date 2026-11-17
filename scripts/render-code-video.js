@@ -7,6 +7,13 @@
  *  - يرندر كل الإطارات بمعدل fps ثابت حقيقي (افتراضي 30، بلا أي تخفيض تكيفي)
  *    وبأبعاد FHD كاملة (افتراضي 1080×1920) عبر Chromium (puppeteer-core +
  *    كروم النظام) ثم يضخ الإطارات عبر stdin في FFmpeg (H.264 CRF 18).
+ *  - ملء الكادر تلقائيًا: يقيس المقاس الطبيعي للمشهد (svg/canvas/حاوية الجسم)
+ *    مهما كان مقاس التصميم (720×1280، 540×960…) ويكبّره ليملأ 100% من الإطار
+ *    الهدف بلا فراغات سوداء — عبر deviceScaleFactor (رسم بدقة أعلى) عند توافق
+ *    الأبعاد، وإلا تحويل CSS موحد مع توسيط (اقتصاص ≤15%) أو حشو بخلفية المشهد.
+ *  - الصوت: يدعم الروابط http/data: (المضمّن يُفك محليًا) مع محاولتي تنزيل
+ *    وترويسة متصفح، ويُدمج مسار صوت AAC دائمًا (حتى الصامت anullsrc)، ثم يتحقق
+ *    بـ ffprobe من الناتج: الأبعاد والمعدل والمدة ووجود مسار الصوت فعليًا.
  *  - يرفع MP4 مجزأً إلى meko-manger /api/render-complete (op=chunk ثم
  *    op=finalize) فتُحدَّث المهمة في Turso: status=completed, progress=100,
  *    video_url=/api/jobs/{job_id}/video.
@@ -29,7 +36,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawn, execFileSync } = require("child_process");
+const { spawn, spawnSync, execFileSync } = require("child_process");
 
 // ---------------------------------------------------------------------------
 // إعدادات ومدخلات
@@ -221,6 +228,14 @@ async function renderVideo({ html, width, height, fps, duration, wordTimings, au
     const warmError = await page.evaluate(() => window.__mekoRenderError || null);
     if (warmError) throw new Error(`renderAtTime ألقت خطأً عند t=0: ${warmError.slice(0, 300)}`);
 
+    // ملء الكادر: اكتشاف مقاس المشهد الطبيعي وتكبيره ليملأ 100% من الإطار
+    // (المشاهد المصممة 720×1280 أو 540×960 تظهر صغيرة بزاوية الإطار دونه)
+    const fit = await fitStageToFrame(page, width, height);
+    if (fit) {
+      log(`ملء الكادر: المشهد ${fit.naturalW}×${fit.naturalH} → ${width}×${height} عبر ${fit.strategy} (scale=${fit.scale.toFixed(3)})`);
+      await writeSummary(`**ملء الكادر**: المشهد ${fit.naturalW}×${fit.naturalH} → ${width}×${height} — ${fit.strategy === "viewport-dsf" ? "تكبير بدقة أعلى (deviceScaleFactor)" : fit.strategy === "transform-cover" ? "تحويل CSS مع اقتصاص طفيف للمواءمة" : "تحويل CSS مع حشو بخلفية المشهد"} (scale ${fit.scale.toFixed(3)})`);
+    }
+
     // أمر ffmpeg — الإطارات تُضخ عبر stdin أثناء الالتقاط (بلا ملفات وسيطة)
     const args = ["-y", "-hide_banner", "-loglevel", "error", "-progress", "pipe:1", "-nostats"];
     args.push("-f", "image2pipe", "-framerate", String(fps), "-i", "-");
@@ -273,12 +288,190 @@ async function renderVideo({ html, width, height, fps, duration, wordTimings, au
 
     const st = fs.statSync(outputPath);
     if (st.size < 20_000) throw new Error(`الناتج صغير بشكل مريب (${st.size} بايت) — رندر فاشل غالبًا`);
+
+    // التحقق النهائي بـ ffprobe: الأبعاد والمعدل والمدة ووجود مسار الصوت فعليًا
+    const probe = await probeOutput(outputPath, { width, height, fps, duration, expectAudio: Boolean(audioPath) });
+    await writeSummary(
+      `**تحقق ffprobe**: ${probe.w}×${probe.h} @ ${probe.fps}fps — ${probe.durationSec.toFixed(2)}s — ` +
+      (probe.hasAudio
+        ? `مسار صوت ${probe.audioCodec}${audioPath ? " (التعليق مدمج)" : " (صامت مولّد — بلا تعليق صوتي مطلوب)"}`
+        : "بلا مسار صوت"),
+    );
+
     fs.copyFileSync(outputPath, PROGRESS_VIDEO_PATH);
-    return { frames: captured, size: st.size };
+    return { frames: captured, size: st.size, probe };
   } finally {
     try { await browser.close(); } catch { /* تجاهل */ }
     fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+// ---------------------------------------------------------------------------
+// ملء الكادر — اكتشاف مقاس المشهد الطبيعي وملاءمته للإطار الهدف
+
+/**
+ * المشاهد تُصمّم غالبًا بمقاس أصغر من FHD (720×1280 أو 540×960…) فتظهر صغيرة
+ * بزاوية الإطار مع فراغ أسود. هنا نقيس المسرح الفعلي داخل الصفحة ثم نملأ الإطار
+ * بأحد استراتيجيتين:
+ *  1) viewport-dsf (الأفضل جودةً): إعادة ضبط العرض إلى مقاس التصميم مع
+ *     deviceScaleFactor = الهدف/التصميم — المتصفح يرسم النص والمتجهات بدقة
+ *     أعلى (ليس تكبيرًا نقطيًا). يُعتمد بعد تحقق فعلي من أبعاد لقطة PNG؛
+ *  2) transform: تكبير CSS موحد للمسرح مع توسيط — اقتصاص مركزي عند تفاوت
+ *     الأبعاد حتى 15%، أو حشو بخلفية المشهد عند تفاوت أكبر كي لا تظهر أشرطة سوداء.
+ */
+async function fitStageToFrame(page, targetW, targetH) {
+  try {
+    const natural = await page.evaluate(detectStageInPage);
+    if (!natural || !(natural.w >= 160) || !(natural.h >= 160)) return null;
+    // المشهد سائل بحجم الإطار بالفعل — لا شيء لفعله
+    if (Math.abs(natural.w - targetW) <= 2 && Math.abs(natural.h - targetH) <= 2) return null;
+
+    // المحاولة الأولى: deviceScaleFactor — أعلى جودة نص ومتجهات
+    const nwR = Math.round(natural.w);
+    const nhR = Math.round(natural.h);
+    const dsf = targetW / nwR;
+    if (dsf > 0.05 && dsf < 8) {
+      await page.setViewport({ width: nwR, height: nhR, deviceScaleFactor: dsf });
+      await page.evaluate(() => window.dispatchEvent(new Event("resize"))).catch(() => {});
+      const probe = await page.screenshot({ type: "png", captureBeyondViewport: false });
+      // puppeteer 23 يعيد Uint8Array بدل Buffer — DataView آمنة للاثنين
+      const dv = new DataView(probe.buffer, probe.byteOffset, probe.byteLength);
+      const pw = dv.getUint32(16); // IHDR width
+      const ph = dv.getUint32(20); // IHDR height
+      if (pw === targetW && ph === targetH) {
+        return { naturalW: nwR, naturalH: nhR, strategy: "viewport-dsf", scale: dsf };
+      }
+      log(`تحقق dsf فشل (اللقطة ${pw}×${ph} بدل ${targetW}×${targetH}) — التحول إلى تكبير CSS`);
+    }
+
+    // الاستراتيجية الثانية: تكبير CSS موحد مع توسيط (اقتصاص ≤15% أو حشو)
+    const applied = await page.evaluate(applyStageTransformInPage, { targetW, targetH });
+    if (!applied || !(applied.scale > 0)) {
+      await page.setViewport({ width: targetW, height: targetH, deviceScaleFactor: 1 });
+      return null;
+    }
+    return {
+      naturalW: Math.round(applied.naturalW),
+      naturalH: Math.round(applied.naturalH),
+      strategy: applied.mode === "cover" ? "transform-cover" : "transform-contain",
+      scale: applied.scale,
+    };
+  } catch (e) {
+    log(`ملء الكادر تخطى: ${e instanceof Error ? e.message.slice(0, 200) : String(e)}`);
+    try { await page.setViewport({ width: targetW, height: targetH, deviceScaleFactor: 1 }); } catch { /* تجاهل */ }
+    return null;
+  }
+}
+
+/** كشف المقاس الطبيعي للمشهد داخل الصفحة — يعمل داخل المتصفح ويوسم العناصر المرشحة */
+function detectStageInPage() {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const vArea = vw * vh;
+  const nearly = (a, b) => Math.abs(a - b) <= 2;
+
+  const marked = [];
+  const consider = (el, w, h, priority) => {
+    if (!el || !(w >= 160) || !(h >= 160)) return;
+    if (nearly(w, vw) && nearly(h, vh)) return; // بحجم الإطار الحالي — مشهد سائل
+    // عناصر صغيرة (شارة/شريط ترجمة) لا تمثل المسرح الكامل
+    if (w * h < vArea * 0.12 || Math.min(w / vw, h / vh) < 0.3) return;
+    marked.push({ el, w, h, priority, area: w * h });
+  };
+
+  // 1) عناصر الوسائط بأبعاد تصميمية صريحة — أعلى أولوية
+  for (const el of document.querySelectorAll("svg, canvas, video")) {
+    const r = el.getBoundingClientRect();
+    consider(el, r.width || el.clientWidth, r.height || el.clientHeight, 1);
+  }
+  // 2) جسم/جذر بحجم تصميم ثابت (أقل من الإطار في البعدين)
+  const body = document.body;
+  const root = document.documentElement;
+  if (body && body.offsetWidth < vw - 2 && body.offsetHeight < vh - 2) {
+    consider(body, body.offsetWidth, body.offsetHeight, 2);
+  }
+  if (root && root.clientWidth < vw - 2 && root.clientHeight < vh - 2) {
+    consider(root, root.clientWidth, root.clientHeight, 2);
+  }
+  // 3) حاويات مسرح شائعة
+  const stageSel = "#stage,[data-stage],.stage,#scene,.scene,#app,#root,#container,#wrapper,.wrapper,main";
+  for (const el of document.querySelectorAll(stageSel)) {
+    if (el === body || el === root) continue;
+    const r = el.getBoundingClientRect();
+    consider(el, r.width, r.height, 3);
+  }
+  // 4) أبناء الجسم المباشرون — الابن الكبير الوحيد هو المسرح غالبًا، وإلا اتحادهم
+  const kids = body
+    ? Array.from(body.children).filter((c) => !["SCRIPT", "STYLE", "LINK", "NOSCRIPT"].includes(c.tagName))
+    : [];
+  const bigRects = kids.map((c) => c.getBoundingClientRect()).filter((r) => r.width >= 160 && r.height >= 160);
+  if (bigRects.length === 1) {
+    const theKid = kids.find((c) => { const r = c.getBoundingClientRect(); return r.width >= 160 && r.height >= 160; });
+    consider(theKid, bigRects[0].width, bigRects[0].height, 4);
+  } else if (bigRects.length > 1) {
+    const u = bigRects.reduce((a, r) => ({
+      left: Math.min(a.left, r.left), top: Math.min(a.top, r.top),
+      right: Math.max(a.right, r.right), bottom: Math.max(a.bottom, r.bottom),
+    }), { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity });
+    if (u.right > u.left && u.bottom > u.top) {
+      // اتحاد عدة أبناء: يوسم كل عنصر كبير كي يُحوّل مجتمعين لاحقًا
+      kids.forEach((c) => { const r = c.getBoundingClientRect(); if (r.width >= 160 && r.height >= 160) consider(c, r.width, r.height, 5); });
+    }
+  }
+
+  if (!marked.length) return null;
+  marked.sort((a, b) => (a.priority - b.priority) || (b.area - a.area));
+  const best = marked[0];
+  // وسوم على كل المرشحين — لا يمكن إعادة عناصر DOM من evaluate فتعاد قراءتها بالوسم
+  for (const m of marked) m.el.setAttribute("data-meko-stage", String(m.priority));
+  const r = best.el.getBoundingClientRect();
+  return { w: best.w, h: best.h, left: r.left, top: r.top };
+}
+
+/** تطبيق التكبير CSS الموحد على العناصر الموسومة — يعمل داخل المتصفح */
+function applyStageTransformInPage(spec) {
+  const els = Array.from(document.querySelectorAll("[data-meko-stage]"));
+  if (!els.length) return null;
+  const targetW = spec.targetW;
+  const targetH = spec.targetH;
+  const rects = els.map((el) => ({ el, r: el.getBoundingClientRect() }));
+
+  // اتحاد المسرح الموسوم — المرجع للتوسيط والاقتصاص المركزي
+  const u = rects.reduce((a, x) => ({
+    left: Math.min(a.left, x.r.left), top: Math.min(a.top, x.r.top),
+    right: Math.max(a.right, x.r.right), bottom: Math.max(a.bottom, x.r.bottom),
+  }), { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity });
+  const nw = u.right - u.left;
+  const nh = u.bottom - u.top;
+  if (!(nw >= 160) || !(nh >= 160)) return null;
+
+  const sx = targetW / nw;
+  const sy = targetH / nh;
+  const overflowRatio = 1 - Math.min(sx, sy) / Math.max(sx, sy);
+  // توافق الأبعاد أو اقتصاص ≤15% → تغطية تامة؛ تفاوت كبير → حشو (حفاظ على المحتوى)
+  const mode = overflowRatio <= 0.15 ? "cover" : "contain";
+  const s = mode === "cover" ? Math.max(sx, sy) : Math.min(sx, sy);
+  const uLeft = (targetW - nw * s) / 2;
+  const uTop = (targetH - nh * s) / 2;
+
+  for (const { el, r } of rects) {
+    // ترجمة + تكبير بمنشأ الزاوية العلوية اليسرى — يحفظ التخطيط النسبي لعناصر متعددة
+    const dx = uLeft + s * (r.left - u.left) - r.left;
+    const dy = uTop + s * (r.top - u.top) - r.top;
+    el.style.transformOrigin = "0 0";
+    el.style.transform = `translate(${dx.toFixed(2)}px, ${dy.toFixed(2)}px) scale(${s.toFixed(5)})`;
+    el.removeAttribute("data-meko-stage");
+  }
+
+  // عند الحشو: خلفية الجذر من خلفية المسرح كي لا تبدو الأشرطة سوداء
+  if (mode === "contain") {
+    const bg = getComputedStyle(rects[0].el).backgroundColor;
+    if (bg && bg !== "rgba(0, 0, 0, 0)") {
+      document.documentElement.style.background = bg;
+      if (document.body) document.body.style.background = bg;
+    }
+  }
+  return { naturalW: nw, naturalH: nh, scale: s, mode, count: rects.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -386,19 +579,136 @@ async function audioDurationSec(filePath) {
   });
 }
 
-async function downloadAudio(url) {
-  const res = await fetchWithTimeout(url, {}, 120_000);
-  if (!res.ok) throw new Error(`تعذر تنزيل الصوت (${res.status}) من ${String(url).slice(0, 120)}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length < 512) throw new Error("ملف الصوت غير صالح أو فارغ");
-  const head = buf.subarray(0, 512).toString("latin1").trim().toLowerCase();
-  const ct = (res.headers.get("content-type") || "").toLowerCase();
-  if (head.startsWith("<!doctype") || head.startsWith("<html") || ct.includes("text/html")) {
-    throw new Error(`رابط الصوت يعيد صفحة HTML بدل الملف الخام (${ct || "بلا نوع"}) — انتهت صلاحية الرابط: ${String(url).slice(0, 120)}`);
+// ---------------------------------------------------------------------------
+// التحقق من الناتج — ffprobe على MP4 النهائي (الأبعاد/المعدل/المدة/مسار الصوت)
+
+function ffprobeJson(file) {
+  try {
+    const out = execFileSync(
+      "ffprobe",
+      ["-v", "error", "-print_format", "json", "-show_streams", "-show_format", file],
+      { encoding: "utf8", timeout: 60_000, maxBuffer: 8 * 1024 * 1024 },
+    );
+    return JSON.parse(out);
+  } catch {
+    return null;
   }
-  const dest = path.join(os.tmpdir(), `audio-${JOB_ID}.bin`);
-  fs.writeFileSync(dest, buf);
-  return dest;
+}
+
+/** بديل بلا ffprobe — تحليل تقرير ffmpeg عن المسارات والمدة */
+function ffmpegInfoFallback(file) {
+  const r = spawnSync("ffmpeg", ["-hide_banner", "-i", file, "-f", "null", "-"], { encoding: "utf8", timeout: 60_000 });
+  const err = String((r && r.stderr) || "");
+  const dur = err.match(/Duration:\s*(\d+):(\d{2}):(\d{2})\.(\d{2})/);
+  const durationSec = dur ? Number(dur[1]) * 3600 + Number(dur[2]) * 60 + Number(dur[3]) + Number(dur[4]) / 100 : 0;
+  const vid = /Stream #\d+:\d+.*?: Video: .*?(\d{2,5})x(\d{2,5})/.exec(err);
+  const fpsM = /Stream #\d+:\d+.*?: Video: .*?([\d.]+) fps/.exec(err);
+  const aud = /Stream #\d+:\d+.*?: Audio: (\w+)/.exec(err);
+  return {
+    video: vid ? { width: Number(vid[1]), height: Number(vid[2]), fpsText: fpsM ? fpsM[1] : "" } : null,
+    audio: aud ? { codec_name: aud[1] } : null,
+    durationSec,
+  };
+}
+
+function parseFpsText(text) {
+  if (!text) return 0;
+  const m = String(text).match(/^(\d+)(?:\/(\d+))?$/);
+  if (m) return Number(m[2]) ? Number(m[1]) / Number(m[2]) : Number(m[1]);
+  const n = Number(text);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * تحقق صارم من الناتج النهائي قبل النشر — أي انحراف يعني رندرًا فاشلًا:
+ * أبعاد الإطار = المطلوب، المعدل = المطلوب، المدة قريبة، ومسار الصوت موجود
+ * عند وجود صوت مدمج (اختفاء الصوت بعد الرندر هو خطأ لا يُقبل).
+ */
+async function probeOutput(outputPath, expect) {
+  const j = ffprobeJson(outputPath);
+  let video = null;
+  let audio = null;
+  let durationSec = 0;
+  if (j && Array.isArray(j.streams)) {
+    video = j.streams.find((s) => s.codec_type === "video") || null;
+    audio = j.streams.find((s) => s.codec_type === "audio") || null;
+    durationSec = Number((j.format && j.format.duration) || 0) || Number((video && video.duration) || 0) || 0;
+  } else {
+    const fb = ffmpegInfoFallback(outputPath);
+    video = fb.video;
+    audio = fb.audio;
+    durationSec = fb.durationSec;
+  }
+  if (!video) throw new Error("تحقق الناتج: لا يوجد مسار فيديو في MP4 النهائي!");
+
+  const w = Number(video.width) || 0;
+  const h = Number(video.height) || 0;
+  const fps = parseFpsText(video.avg_frame_rate || video.r_frame_rate || video.fpsText || "");
+  if (w !== expect.width || h !== expect.height) {
+    throw new Error(`تحقق الناتج: الأبعاد ${w}×${h} بدل ${expect.width}×${expect.height} المطلوبة`);
+  }
+  if (fps && Math.abs(fps - expect.fps) > 0.6) {
+    throw new Error(`تحقق الناتج: معدل الإطارات ${fps.toFixed(2)} بدل ${expect.fps} المطلوب`);
+  }
+  const durTol = Math.max(0.6, expect.duration * 0.05);
+  if (durationSec && Math.abs(durationSec - expect.duration) > durTol) {
+    throw new Error(`تحقق الناتج: المدة ${durationSec.toFixed(2)}s بدل ${expect.duration.toFixed(2)}s المطلوبة`);
+  }
+  if (expect.expectAudio && !audio) {
+    throw new Error("تحقق الناتج: الصوت المدمج اختفى من MP4 النهائي — لا يوجد مسار صوت!");
+  }
+  return {
+    w,
+    h,
+    fps: fps || expect.fps,
+    durationSec: durationSec || expect.duration,
+    hasAudio: Boolean(audio),
+    audioCodec: (audio && audio.codec_name) || null,
+  };
+}
+
+async function downloadAudio(url) {
+  const str = String(url);
+
+  // 1) صوت مضمّن data: (الحل الأخير للرفع في Meko عندما تفشل كل المضيفين) —
+  //    يُفك محليًا بلا أي شبكة، فيصل الصوت دائمًا ولو حُجب كل المضيفين الخارجيين
+  if (/^data:/i.test(str)) {
+    const m = str.match(/^data:([\w.+/-]+)?;base64,([\s\S]+)$/i);
+    if (!m) throw new Error("رابط الصوت المضمّن (data:) غير صالح — صيغة base64 مطلوبة");
+    const buf = Buffer.from(m[2].replace(/\s+/g, ""), "base64");
+    if (buf.length < 512) throw new Error(`الصوت المضمّن (data:) أصغر من اللازم (${buf.length} بايت) — قد يكون فارغًا`);
+    const dest = path.join(os.tmpdir(), `audio-${JOB_ID}.bin`);
+    fs.writeFileSync(dest, buf);
+    log(`الصوت المضمّن (data:${m[1] || "audio"}) — ${(buf.length / 1024).toFixed(0)}KB`);
+    return dest;
+  }
+
+  // 2) رابط http — محاولتان مع ترويسة متصفح (مضيفون مثل catbox يرفضون ترويسة Node)
+  const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await fetchWithTimeout(str, { headers: { "User-Agent": UA, Accept: "*/*" } }, 120_000);
+      if (!res.ok) throw new Error(`تعذر تنزيل الصوت (HTTP ${res.status}) من ${str.slice(0, 120)}`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length < 512) throw new Error("ملف الصوت غير صالح أو فارغ");
+      const head = buf.subarray(0, 512).toString("latin1").trim().toLowerCase();
+      const ct = (res.headers.get("content-type") || "").toLowerCase();
+      if (head.startsWith("<!doctype") || head.startsWith("<html") || ct.includes("text/html")) {
+        throw new Error(`رابط الصوت يعيد صفحة HTML بدل الملف الخام (${ct || "بلا نوع"}) — انتهت صلاحية الرابط: ${str.slice(0, 120)}`);
+      }
+      const dest = path.join(os.tmpdir(), `audio-${JOB_ID}.bin`);
+      fs.writeFileSync(dest, buf);
+      return dest;
+    } catch (e) {
+      lastErr = e;
+      if (attempt < 2) {
+        log(`تنزيل الصوت فشل (محاولة ${attempt}): ${e instanceof Error ? e.message.slice(0, 160) : String(e).slice(0, 160)} — إعادة بعد 3 ثوانٍ…`);
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
 // ---------------------------------------------------------------------------

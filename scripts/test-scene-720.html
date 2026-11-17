@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>اختبار ملء الكادر — مشهد مصمم 720×1280</title>
+<style>
+  /* مقاس التصميم الأصلي 720×1280 — أصغر من إطار FHD 1080×1920 عمدًا
+     لإثبات أن العامل يملأ الكادر بالكامل بلا فراغات سوداء */
+  html, body { margin: 0; padding: 0; width: 720px; height: 1280px; overflow: hidden; }
+  body { background: #0b1020; font-family: 'MekoArabic', system-ui, sans-serif; color: #e8ecff; }
+  #stage { position: relative; width: 720px; height: 1280px; background: linear-gradient(160deg, #0b1020 0%, #16214a 60%, #1d2f6b 100%); }
+  #orb { position: absolute; top: 120px; right: 60px; width: 150px; height: 150px; }
+  #code { position: absolute; top: 330px; right: 50px; left: 50px; height: 500px; direction: ltr; text-align: left;
+          font-family: 'MekoLatin', monospace; font-size: 26px; line-height: 1.5; white-space: pre-wrap; color: #9fe7ff; }
+  #title { position: absolute; top: 60px; right: 50px; left: 50px; font-size: 44px; font-weight: bold; color: #ffffff; text-align: center; }
+  #subtitle { position: absolute; top: 900px; right: 50px; left: 50px; font-size: 30px; color: #ffd166; text-align: center; min-height: 120px; }
+  #bar { position: absolute; top: 1100px; right: 50px; left: 50px; height: 24px; border-radius: 12px; background: #232c55; overflow: hidden; }
+  #fill { height: 100%; width: 0%; background: linear-gradient(90deg, #22d3ee, #a78bfa); }
+  #counter { position: absolute; top: 1140px; right: 50px; left: 50px; text-align: center; font-size: 24px; color: #8fa0d8; direction: ltr; }
+  .kw { color: #c792ea; } .fn { color: #82aaff; } .str { color: #c3e88d; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="title">ملء الكادر 100%</div>
+  <svg id="orb" viewBox="0 0 100 100">
+    <defs>
+      <radialGradient id="g1"><stop offset="0%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#4c1d95"/></radialGradient>
+    </defs>
+    <circle cx="50" cy="50" r="42" fill="url(#g1)">
+      <animate attributeName="r" values="40;44;40" dur="2s" repeatCount="indefinite"/>
+    </circle>
+    <ellipse cx="50" cy="50" rx="46" ry="16" fill="none" stroke="#22d3ee" stroke-width="2" opacity="0.7"/>
+  </svg>
+  <div id="code"></div>
+  <div id="subtitle"></div>
+  <div id="bar"><div id="fill"></div></div>
+  <div id="counter">frame 0</div>
+</div>
+<script>
+  const CODE_LINES = [
+    ['const ', 'kw'], ['scene', ''], [' = ', ''], ['new ', 'kw'], ['Scene', 'fn'], ['(', ''], [')', ''],
+    ['scene.', ''], ['fill', 'fn'], ['(', ''], ['"1080x1920"', 'str'], [')', ''],
+    ['scene.', ''], ['scale', 'fn'], ['(', ''], ['1.5', 'str'], [')', ''],
+    ['await ', 'kw'], ['scene.', ''], ['render', 'fn'], ['(', ''], [')', ''],
+  ];
+  window.renderAtTime = function (t, duration, wordTimings) {
+    const p = Math.min(1, t / duration);
+    // سطر الكود يظهر تدريجيًا حسب التقدم
+    const total = CODE_LINES.length;
+    const shown = Math.floor(p * (total + 2));
+    let html = '';
+    for (let i = 0; i < Math.min(shown, total); i++) {
+      const [txt, cls] = CODE_LINES[i];
+      html += cls ? '<span class="' + cls + '">' + txt + '</span>' : txt;
+      if (i % 3 === 2) html += '\n';
+    }
+    document.getElementById('code').textContent = '';
+    document.getElementById('code').innerHTML = html.replace(/\n/g, '<br>');
+    // الكرة تتحرك بمسار جيبي
+    const orb = document.getElementById('orb');
+    const x = 400 + Math.sin(p * Math.PI * 4) * 180;
+    const y = 120 + Math.cos(p * Math.PI * 3) * 90;
+    orb.style.transform = 'translate(' + (x - 460) + 'px,' + (y - 120) + 'px)';
+    // الترجمة الصوتية (مزامنة الكلمات إن توفرت)
+    let sub = 'جارٍ ملء الإطار بالكامل — بلا فراغات';
+    if (wordTimings && wordTimings.length) {
+      const spoken = wordTimings.filter((w) => w.start <= t && t <= w.end + 0.4);
+      if (spoken.length) sub = spoken.map((w) => w.text).join(' ');
+    }
+    document.getElementById('subtitle').textContent = sub;
+    document.getElementById('fill').style.width = (p * 100).toFixed(1) + '%';
+    document.getElementById('counter').textContent = 't=' + t.toFixed(2) + 's / ' + duration.toFixed(1) + 's';
+  };
+</script>
+</body>
+</html>

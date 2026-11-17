@@ -20,8 +20,9 @@
 const crypto = require("crypto");
 const { getDb, ensureSchema } = require("../lib/db");
 
-/** حد حجم الحمولة الواحدة (كود المشهد حتى 300KB + توقيتات + هامش) */
-const PAYLOAD_MAX_BYTES = 2 * 1024 * 1024;
+/** حد حجم الحمولة الواحدة — كود المشهد حتى 300KB + صوت مضمّن data: حتى ~1.8MB
+ *  (Edge-TTS لمشهد طويل) + توقيتات الكلمات وهامش JSON (حد جسم Vercel 4.5MB) */
+const PAYLOAD_MAX_BYTES = 4 * 1024 * 1024;
 /** حد طول كود HTML المتاح للرندر (نفس حد نقطة codevideo) */
 const HTML_MAX_CHARS = 300_000;
 const RETENTION_HOURS = 24;
