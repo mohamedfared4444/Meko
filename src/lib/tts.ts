@@ -57,6 +57,10 @@ export function sanitizeRate(rate?: string): string | undefined {
   return `${m[1]}${pct}%`;
 }
 
+/** سرعة الإلقاء الافتراضية لـ Edge-TTS — إيقاع وثائقي هادئ (-7%) يمنح المشاهِد
+ *  مساحةً لمتابعة الترجمة الحركية المدمجة؛ تُتجاوز عند تمرير rate صريح للمولّد. */
+export const DEFAULT_TTS_RATE = "-7%";
+
 /**
  * تنقية طبقة النبرة — تقبل +0Hz / -2Hz / +3st … وتقصر إلى ±50Hz.
  * «+0Hz» أو القيم الصفرية تعني «بلا تغيير» فتعيد undefined (لا تُمرر لـ Edge).
@@ -167,7 +171,8 @@ export interface TtsResult {
 
 /** توليد تعليق صوتي MP3 من نص — يعيد البايتات والمدة الدقيقة بالثواني
  *  (واختياريًا توقيتات كل كلمة لبناء الترجمة المتزامنة من نفس نداء Edge).
- *  rate وpitch اختياريان للتحكم في الإلقاء (+10%، -2Hz …). */
+ *  rate وpitch اختياريان للتحكم في الإلقاء (+10%، -2Hz …) — بدون rate صريح
+ *  يُستخدم الافتراضي الهادئ DEFAULT_TTS_RATE (-7%). */
 export async function synthesizeSpeech(
   text: string,
   opts: { voice?: string; rate?: string; pitch?: string; timeoutMs?: number; collectTimings?: boolean } = {},
@@ -177,7 +182,8 @@ export async function synthesizeSpeech(
   if (narration.length > 6000) throw new Error("النص طويل جدًا للتحويل الصوتي (الحد 6000 حرفًا) — قسّمه إلى مقاطع");
 
   const voice = normalizeVoice(opts.voice);
-  const rate = sanitizeRate(opts.rate);
+  // الافتراضي هادئ (-7%) — إيقاع وثائقي مريح؛ الصريح من المستدعي يتجاوزه
+  const rate = sanitizeRate(opts.rate) ?? DEFAULT_TTS_RATE;
   const pitch = sanitizePitch(opts.pitch);
 
   const { MsEdgeTTS, OUTPUT_FORMAT } = await import("msedge-tts");
