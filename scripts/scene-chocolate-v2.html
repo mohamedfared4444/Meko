@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>From Scratch - Chocolate Factory v2</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:720px;height:1280px;background:#f5dfb8;overflow:hidden;font-family:Arial,sans-serif;}
+#stage{position:relative;width:720px;height:1280px;overflow:hidden;background:#f5dfb8;}
+svg{position:absolute;inset:0;width:720px;height:1280px;display:block;}
+.title-lbl{font-weight:900;font-size:26px;fill:#3b2314;letter-spacing:1px;}
+.sub-lbl{font-size:17px;font-weight:800;fill:#6b442a;}
+.bp{fill:none;stroke:#0284c7;stroke-width:5;stroke-dasharray:14 10;}
+.outline{stroke:#3b2314;stroke-width:5;stroke-linejoin:round;stroke-linecap:round;}
+</style>
+</head>
+<body>
+<div id="stage">
+<svg id="cam" viewBox="0 0 720 1280" xmlns="http://www.w3.org/2000/svg">
+<defs>
+ <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+  <stop offset="0" stop-color="#fff3d6"/>
+  <stop offset="0.65" stop-color="#f7cf8e"/>
+  <stop offset="1" stop-color="#e3a85c"/>
+ </linearGradient>
+ <linearGradient id="chocoGrad" x1="0" y1="0" x2="0" y2="1">
+  <stop offset="0" stop-color="#7c3a1d"/>
+  <stop offset="1" stop-color="#3b170b"/>
+ </linearGradient>
+ <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
+  <stop offset="0" stop-color="#fde047"/>
+  <stop offset="1" stop-color="#d97706"/>
+ </linearGradient>
+ <g id="beanShape">
+  <ellipse cx="0" cy="0" rx="18" ry="11" stroke="#3b2314" stroke-width="3"/>
+  <path d="M-11 0 Q0 -4 11 0" fill="none" stroke="#3b2314" stroke-width="2.5"/>
+ </g>
+</defs>
+
+<!-- WORLD (-450 to 4950) -->
+<rect x="-500" y="-400" width="5600" height="2200" fill="url(#sky)"/>
+
+<!-- Clouds -->
+<g fill="#fffbeb" opacity="0.75">
+ <g transform="translate(-120 180)"><ellipse cx="0" cy="18" rx="70" ry="20"/><circle cx="-30" cy="0" r="26"/><circle cx="5" cy="-8" r="34"/><circle cx="38" cy="4" r="24"/></g>
+ <g transform="translate(600 160)"><ellipse cx="0" cy="18" rx="80" ry="22"/><circle cx="-35" cy="0" r="28"/><circle cx="5" cy="-10" r="36"/><circle cx="42" cy="5" r="25"/></g>
+ <g transform="translate(1800 175)"><ellipse cx="0" cy="18" rx="80" ry="22"/><circle cx="-35" cy="0" r="28"/><circle cx="5" cy="-10" r="36"/><circle cx="42" cy="5" r="25"/></g>
+ <g transform="translate(3000 160)"><ellipse cx="0" cy="18" rx="80" ry="22"/><circle cx="-35" cy="0" r="28"/><circle cx="5" cy="-10" r="36"/><circle cx="42" cy="5" r="25"/></g>
+ <g transform="translate(4200 175)"><ellipse cx="0" cy="18" rx="80" ry="22"/><circle cx="-35" cy="0" r="28"/><circle cx="5" cy="-10" r="36"/><circle cx="42" cy="5" r="25"/></g>
+</g>
+
+<!-- Ground & Conveyor -->
+<rect x="-500" y="810" width="5600" height="900" fill="#7c4726"/>
+<rect x="-500" y="790" width="5600" height="24" fill="#c28549" stroke="#3b2314" stroke-width="5"/>
+
+<!-- Conveyor Belt Track from Stage 1 to 8 -->
+<rect x="200" y="730" width="4400" height="32" rx="16" fill="#334155" stroke="#1e293b" stroke-width="5"/>
+<line id="beltDash" x1="215" y1="746" x2="4585" y2="746" stroke="#94a3b8" stroke-width="6" stroke-dasharray="22 18"/>
+
+<!-- Glass Liquid Pipes connecting stages 3->4->5->6->7->8 -->
+<path d="M1610 610 H1980 M2220 610 H2560 M2840 610 H3150 M3450 610 H3780 M4020 610 H4370" fill="none" stroke="#bae6fd" stroke-width="24" opacity="0.7"/>
+<path d="M1610 610 H1980 M2220 610 H2560 M2840 610 H3150 M3450 610 H3780 M4020 610 H4370" fill="none" stroke="#0284c7" stroke-width="4"/>
+<path id="pipeFlow" d="M1610 610 H1980 M2220 610 H2560 M2840 610 H3150 M3450 610 H3780 M4020 610 H4370" fill="none" stroke="#5c2812" stroke-width="14" stroke-dasharray="28 14"/>
+
+<!-- INTRO ZONE (x = -120): Raw Cocoa Pod & Bitter Bean -->
+<g id="introZone" transform="translate(-120 0)">
+ <text x="0" y="220" text-anchor="middle" class="title-lbl">RAW COCOA BEANS</text>
+ <!-- Open Cocoa Pod on wooden table -->
+ <rect x="-150" y="650" width="300" height="140" rx="12" fill="#a1622f" class="outline"/>
+ <g transform="translate(-45 555) rotate(-18)">
+  <path d="M-95 0 C-95 -65 95 -65 95 0 C95 65 -95 65 -95 0 Z" fill="#dc2626" class="outline"/>
+  <path d="M-75 0 C-75 -42 75 -42 75 0 C75 42 -75 42 -75 0 Z" fill="#fef3c7" class="outline"/>
+  <!-- White raw beans inside pod -->
+  <use href="#beanShape" x="-35" y="-10" fill="#fffbeb"/>
+  <use href="#beanShape" x="0" y="-14" fill="#fffbeb"/>
+  <use href="#beanShape" x="35" y="-8" fill="#fffbeb"/>
+  <use href="#beanShape" x="-25" y="14" fill="#fffbeb"/>
+  <use href="#beanShape" x="18" y="13" fill="#fffbeb"/>
+ </g>
+ <!-- Hero Bean with Bite Mark -->
+ <g id="biteBean" transform="translate(85 520) scale(1.7)">
+  <path d="M-24 0 A24 15 0 1 1 16 -10 A9 9 0 0 0 16 10 A24 15 0 0 1 -24 0 Z" fill="#fef3c7" stroke="#3b2314" stroke-width="3"/>
+ </g>
+ <g id="awfulBadge" transform="translate(85 430)">
+  <rect x="-75" y="-24" width="150" height="48" rx="24" fill="#ef4444" stroke="#3b2314" stroke-width="4"/>
+  <text x="0" y="8" text-anchor="middle" font-size="22" font-weight="900" fill="#fff">BITTER!</text>
+ </g>
+ <text x="0" y="772" text-anchor="middle" class="sub-lbl">RAW PULP · UNFERMENTED</text>
+</g>
+
+<!-- STAGE 1 (x = 300): HARVEST & FERMENT -->
+<g id="s1" transform="translate(300 0)">
+ <text x="0" y="210" text-anchor="middle" class="title-lbl">01 · HARVEST &amp; FERMENT</text>
+ <g class="bp"><rect x="-140" y="370" width="280" height="350" rx="20"/><line x1="-140" y1="530" x2="140" y2="530"/></g>
+ <g class="solid">
+  <!-- Wooden Fermentation Vat with Glass Front -->
+  <rect x="-140" y="380" width="280" height="340" rx="22" fill="#b45309" class="outline"/>
+  <rect x="-112" y="425" width="224" height="220" rx="14" fill="#fef3c7" class="outline"/>
+  <!-- Beans changing from white to purple -->
+  <g id="fermentBeans">
+   <use href="#beanShape" x="-65" y="475" fill="#fffbeb"/><use href="#beanShape" x="-15" y="470" fill="#fffbeb"/><use href="#beanShape" x="40" y="478" fill="#fffbeb"/><use href="#beanShape" x="75" y="510" fill="#9333ea"/>
+   <use href="#beanShape" x="-70" y="535" fill="#a855f7"/><use href="#beanShape" x="-20" y="540" fill="#7e22ce"/><use href="#beanShape" x="30" y="535" fill="#7e22ce"/>
+   <use href="#beanShape" x="-60" y="595" fill="#581c87"/><use href="#beanShape" x="-5" y="600" fill="#581c87"/><use href="#beanShape" x="55" y="595" fill="#581c87"/>
+  </g>
+  <!-- Thermometer -->
+  <rect x="118" y="430" width="16" height="140" rx="8" fill="#fff" stroke="#3b2314" stroke-width="3"/>
+  <rect x="122" y="465" width="8" height="100" rx="4" fill="#ef4444"/>
+ </g>
+ <text x="0" y="772" text-anchor="middle" class="sub-lbl">WHITE PULP → PURPLE BEANS</text>
+</g>
+
+<!-- STAGE 2 (x = 900): SUN DRY & ROAST -->
+<g id="s2" transform="translate(900 0)">
+ <text x="0" y="210" text-anchor="middle" class="title-lbl">02 · SUN DRY &amp; ROAST</text>
+ <g class="bp"><rect x="-145" y="340" width="290" height="380" rx="22"/><circle cx="0" cy="545" r="75"/></g>
+ <g class="solid">
+  <!-- Sun Rays -->
+  <circle cx="-115" cy="285" r="28" fill="#facc15" class="outline"/>
+  <g stroke="#f59e0b" stroke-width="5"><line x1="-115" y1="242" x2="-115" y2="228"/><line x1="-75" y1="285" x2="-60" y2="285"/><line x1="-85" y1="255" x2="-74" y2="244"/></g>
+  <!-- Top Sun Tray -->
+  <rect x="-135" y="335" width="270" height="48" rx="10" fill="#d97706" class="outline"/>
+  <use href="#beanShape" x="-85" y="358" fill="#78350f"/><use href="#beanShape" x="-30" y="358" fill="#78350f"/><use href="#beanShape" x="25" y="358" fill="#78350f"/><use href="#beanShape" x="80" y="358" fill="#78350f"/>
+  <!-- Drum Roaster -->
+  <rect x="-145" y="405" width="290" height="315" rx="24" fill="#ea580c" class="outline"/>
+  <circle cx="0" cy="545" r="82" fill="#292524" class="outline"/>
+  <!-- Rotating Drum with Roasted Beans -->
+  <g id="roastDrum">
+   <circle cx="0" cy="545" r="64" fill="#44403c" stroke="#f97316" stroke-width="4" stroke-dasharray="16 10"/>
+   <use href="#beanShape" x="-26" y="525" fill="#451a03"/><use href="#beanShape" x="24" y="520" fill="#451a03"/>
+   <use href="#beanShape" x="-18" y="568" fill="#451a03"/><use href="#beanShape" x="26" y="565" fill="#451a03"/>
+  </g>
+  <!-- Flame bar -->
+  <path d="M-75 665 Q-55 635 -35 665 Q-15 635 5 665 Q25 635 45 665 Q65 635 85 665" fill="none" stroke="#facc15" stroke-width="8"/>
+ </g>
+ <text x="0" y="772" text-anchor="middle" class="sub-lbl">ROASTED · SHELLS CRACKED</text>
+</g>
+
+<!-- STAGE 3 (x = 1500): CRUSH & GRIND -->
+<g id="s3" transform="translate(1500 0)">
+ <text x="0" y="210" text-anchor="middle" class="title-lbl">03 · CRUSH &amp; GRIND</text>
+ <g class="bp"><path d="M-110 340 H110 L75 450 H-75 Z"/><rect x="-135" y="450" width="270" height="270" rx="22"/></g>
+ <g class="solid">
+  <!-- Top Hopper with Cocoa Nibs -->
+  <path d="M-115 340 H115 L75 445 H-75 Z" fill="#94a3b8" class="outline"/>
+  <circle cx="-35" cy="385" r="9" fill="#451a03"/><circle cx="0" cy="378" r="10" fill="#451a03"/><circle cx="35" cy="388" r="9" fill="#451a03"/><circle cx="-15" cy="408" r="8" fill="#451a03"/><circle cx="20" cy="406" r="8" fill="#451a03"/>
+  <!-- Grinder Body -->
+  <rect x="-135" y="445" width="270" height="275" rx="24" fill="#64748b" class="outline"/>
+  <!-- Crushing Gears -->
+  <g id="gearL" transform="translate(-45 530)"><circle r="42" fill="#cbd5e1" class="outline"/><line x1="-42" y1="0" x2="42" y2="0" stroke="#3b2314" stroke-width="6"/><line x1="0" y1="-42" x2="0" y2="42" stroke="#3b2314" stroke-width="6"/></g>
+  <g id="gearR" transform="translate(45 530)"><circle r="42" fill="#cbd5e1" class="outline"/><line x1="-42" y1="0" x2="42" y2="0" stroke="#3b2314" stroke-width="6"/><line x1="0" y1="-42" x2="0" y2="42" stroke="#3b2314" stroke-width="6"/></g>
+  <!-- Liquid Cocoa Pool at bottom -->
+  <rect x="-105" y="595" width="210" height="95" rx="14" fill="url(#chocoGrad)" class="outline"/>
+ </g>
+ <text x="0" y="772" text-anchor="middle" class="sub-lbl">CRUSHED NIBS → COCOA LIQUOR</text>
+</g>
+
+<!-- STAGE 4 (x = 2100): HYDRAULIC PRESS -->
+<g id="s4" transform="translate(2100 0)">
+ <text x="0" y="210" text-anchor="middle" class="title-lbl">04 · HYDRAULIC PRESS</text>
+ <g class="bp"><rect x="-140" y="360" width="280" height="360" rx="22"/><line x1="0" y1="310" x2="0" y2="480"/></g>
+ <g class="solid">
+  <rect x="-140" y="370" width="280" height="350" rx="24" fill="#475569" class="outline"/>
+  <!-- Press Chamber -->
+  <rect x="-100" y="425" width="200" height="175" rx="12" fill="#e2e8f0" class="outline"/>
+  <!-- Hydraulic Piston -->
+  <rect x="-24" y="325" width="48" height="125" fill="#94a3b8" class="outline"/>
+  <rect id="pistonHead" x="-88" y="445" width="176" height="28" rx="6" fill="#cbd5e1" class="outline"/>
+  <!-- Separated Golden Butter & Dark Powder Cake -->
+  <rect x="-88" y="475" width="176" height="48" fill="url(#goldGrad)"/>
+  <rect x="-88" y="523" width="176" height="65" fill="#5c2812"/>
+  <!-- Two Output Bins -->
+  <rect x="-110" y="620" width="95" height="75" rx="10" fill="url(#goldGrad)" class="outline"/>
+  <rect x="15" y="620" width="95" height="75" rx="10" fill="#78350f" class="outline"/>
+ </g>
+ <text x="0" y="772" text-anchor="middle" class="sub-lbl">GOLDEN BUTTER + COCOA POWDER</text>
+</g>
+
+<!-- STAGE 5 (x = 2700): MIX & BLEND -->
+<g id="s5" transform="translate(2700 0)">
+ <text x="0" y="210" text-anchor="middle" class="title-lbl">05 · MIX &amp; BLEND</text>
+ <g class="bp"><rect x="-155" y="380" width="310" height="340" rx="26"/><line x1="0" y1="300" x2="0" y2="620"/></g>
+ <g class="solid">
+  <!-- Ingredient Hoppers Top: Milk & Sugar -->
+  <g transform="translate(-80 330)"><rect x="-42" y="-25" width="84" height="50" rx="10" fill="#ffffff" class="outline"/><text x="0" y="7" text-anchor="middle" font-size="16" font-weight="900" fill="#1e293b">MILK</text></g>
+  <g transform="translate(80 330)"><rect x="-46" y="-25" width="92" height="50" rx="10" fill="#fef08a" class="outline"/><text x="0" y="7" text-anchor="middle" font-size="16" font-weight="900" fill="#1e293b">SUGAR</text></g>
+  <!-- Mixing Tank -->
+  <rect x="-155" y="385" width="310" height="335" rx="26" fill="#94a3b8" class="outline"/>
+  <rect x="-125" y="435" width="250" height="240" rx="18" fill="url(#chocoGrad)" class="outline"/>
+  <!-- Mixer Shaft & Blades -->
+  <rect x="-12" y="355" width="24" height="270" fill="#e2e8f0" class="outline"/>
+  <rect id="mixerBlade" x="-95" y="575" width="190" height="22" rx="10" fill="#f8fafc" class="outline"/>
+ </g>
+ <text x="0" y="772" text-anchor="middle" class="sub-lbl">MILK · SUGAR · BUTTER · LIQUOR</text>
+</g>
+
+<!-- STAGE 6 (x = 3300): STONE CONCHING -->
+<g id="s6" transform="translate(3300 0)">
+ <text x="0" y="210" text-anchor="middle" class="title-lbl">06 · STONE CONCHING</text>
+ <g class="bp"><rect x="-175" y="400" width="350" height="320" rx="26"/><circle cx="-75" cy="545" r="78"/><circle cx="75" cy="545" r="78"/></g>
+ <g class="solid">
+  <rect x="-175" y="405" width="350" height="315" rx="26" fill="#b45309" class="outline"/>
+  <!-- Liquid Chocolate Bath -->
+  <rect x="-145" y="515" width="290" height="175" rx="16" fill="url(#chocoGrad)" class="outline"/>
+  <!-- Two Giant Granite Rollers -->
+  <g id="stoneL" transform="translate(-72 545)">
+   <circle r="74" fill="#cbd5e1" class="outline"/>
+   <circle r="54" fill="#94a3b8" stroke="#475569" stroke-width="4" stroke-dasharray="18 12"/>
+   <circle r="22" fill="#475569" class="outline"/>
+  </g>
+  <g id="stoneR" transform="translate(72 545)">
+   <circle r="74" fill="#cbd5e1" class="outline"/>
+   <circle r="54" fill="#94a3b8" stroke="#475569" stroke-width="4" stroke-dasharray="18 12"/>
+   <circle r="22" fill="#475569" class="outline"/>
+  </g>
+ </g>
+ <text x="0" y="772" text-anchor="middle" class="sub-lbl">GRANITE ROLLERS · SILKY SMOOTH</text>
+</g>
+
+<!-- STAGE 7 (x = 3900): PRECISION TEMPERING -->
+<g id="s7" transform="translate(3900 0)">
+ <text x="0" y="210" text-anchor="middle" class="title-lbl">07 · PRECISION TEMPERING</text>
+ <g class="bp"><rect x="-145" y="370" width="290" height="350" rx="24"/><path d="M-90 480 H90 M-90 580 H90"/></g>
+ <g class="solid">
+  <rect x="-145" y="375" width="290" height="345" rx="24" fill="#475569" class="outline"/>
+  <rect x="-110" y="420" width="220" height="230" rx="16" fill="#292524" class="outline"/>
+  <!-- Heating & Cooling Coil -->
+  <path d="M-85 480 H85 L-85 535 H85 L-85 590 H85" fill="none" stroke="#38bdf8" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M-85 480 H85 L-85 535 H85 L-85 590 H85" fill="none" stroke="#facc15" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+ </g>
+ <text x="0" y="772" text-anchor="middle" class="sub-lbl">HEAT &amp; COOL · PERFECT SNAP</text>
+</g>
+
+<!-- STAGE 8 (x = 4500): MOLD, COOL & UNWRAP -->
+<g id="s8" transform="translate(4500 0)">
+ <text x="0" y="210" text-anchor="middle" class="title-lbl">08 · MOLD &amp; UNWRAP</text>
+ <g class="bp"><rect x="-165" y="370" width="330" height="350" rx="24"/><rect x="-125" y="610" width="250" height="75"/></g>
+ <g class="solid">
+  <rect x="-165" y="375" width="330" height="345" rx="24" fill="#64748b" class="outline"/>
+  <!-- Pouring Nozzle & Glossy Chocolate Stream -->
+  <rect x="-35" y="375" width="70" height="45" rx="8" fill="#cbd5e1" class="outline"/>
+  <rect x="-14" y="420" width="28" height="145" fill="url(#chocoGrad)"/>
+  <!-- Mold Tray -->
+  <rect x="-135" y="555" width="270" height="45" rx="10" fill="#cbd5e1" class="outline"/>
+  <!-- Finished Segmented Chocolate Bars Emerging -->
+  <g transform="translate(-85 655)">
+   <rect x="-45" y="-26" width="90" height="52" rx="8" fill="#5c2812" class="outline"/>
+   <line x1="-15" y1="-24" x2="-15" y2="24" stroke="#9a4e28" stroke-width="3"/><line x1="15" y1="-24" x2="15" y2="24" stroke="#9a4e28" stroke-width="3"/><line x1="-43" y1="0" x2="43" y2="0" stroke="#9a4e28" stroke-width="3"/>
+   <!-- Gold Foil Wrapper -->
+   <rect x="5" y="-26" width="40" height="52" rx="6" fill="url(#goldGrad)" stroke="#3b2314" stroke-width="3"/>
+  </g>
+  <g transform="translate(65 655)">
+   <rect x="-45" y="-26" width="90" height="52" rx="8" fill="#5c2812" class="outline"/>
+   <line x1="-15" y1="-24" x2="-15" y2="24" stroke="#9a4e28" stroke-width="3"/><line x1="15" y1="-24" x2="15" y2="24" stroke="#9a4e28" stroke-width="3"/><line x1="-43" y1="0" x2="43" y2="0" stroke="#9a4e28" stroke-width="3"/>
+   <rect x="5" y="-26" width="40" height="52" rx="6" fill="url(#goldGrad)" stroke="#3b2314" stroke-width="3"/>
+  </g>
+ </g>
+ <text x="0" y="772" text-anchor="middle" class="sub-lbl">GLOSSY CHOCOLATE BARS READY</text>
+</g>
+
+<!-- MOVING PRODUCT ITEMS ON CONVEYOR BELT -->
+<g id="beltItems"></g>
+</svg>
+
+<!-- FIXED OVERLAY UI -->
+<svg id="ui" viewBox="0 0 720 1280" xmlns="http://www.w3.org/2000/svg" style="pointer-events:none;background:transparent;">
+ <defs>
+  <clipPath id="lensClip"><circle cx="360" cy="430" r="162"/></clipPath>
+ </defs>
+
+ <!-- Top Progress Pill -->
+ <g id="progress">
+  <rect x="105" y="42" width="510" height="92" rx="46" fill="#291d16" opacity="0.96" stroke="#d97706" stroke-width="4"/>
+  <circle cx="158" cy="88" r="27" fill="none" stroke="#92400e" stroke-width="6"/>
+  <circle id="ring" cx="158" cy="88" r="27" fill="none" stroke="#facc15" stroke-width="6" stroke-dasharray="169.65" stroke-dashoffset="169.65" transform="rotate(-90 158 88)"/>
+  <text x="158" y="94" text-anchor="middle" font-size="15" fill="#fef3c7" font-weight="900">FS</text>
+  <text x="208" y="102" fill="#fffbeb" font-size="22" font-weight="900" letter-spacing="2">FROM SCRATCH</text>
+  <g id="dashes"></g>
+  <text id="stepText" x="572" y="102" text-anchor="middle" font-size="18" font-weight="900" fill="#facc15">0/8</text>
+ </g>
+
+ <!-- Dim Backdrop when Magnifying Lens is Active -->
+ <rect id="lensDim" x="0" y="0" width="720" height="1280" fill="#1c1917" opacity="0"/>
+
+ <!-- Magnifying Lens (Stages 4 & 7) -->
+ <g id="lens" opacity="0">
+  <circle cx="360" cy="430" r="170" fill="#fffbeb" stroke="#1e293b" stroke-width="8"/>
+  <g clip-path="url(#lensClip)">
+   <rect x="190" y="260" width="340" height="340" fill="#fffbeb"/>
+
+   <!-- Lens 1: Hydraulic Separation -->
+   <g id="lensPress">
+    <text x="360" y="315" text-anchor="middle" font-size="21" font-weight="900" fill="#451a03">HYDRAULIC SEPARATION</text>
+    <rect x="240" y="340" width="240" height="44" rx="10" fill="#64748b" stroke="#1e293b" stroke-width="4"/>
+    <rect x="240" y="384" width="240" height="36" fill="#5c2812"/>
+    <!-- Dripping Golden Cocoa Butter Droplets -->
+    <g id="butterDrops" fill="#facc15" stroke="#b45309" stroke-width="3">
+     <path d="M280 430 Q292 465 280 475 Q268 465 280 430 Z"/>
+     <path d="M360 440 Q374 480 360 492 Q346 480 360 440 Z"/>
+     <path d="M440 430 Q452 465 440 475 Q428 465 440 430 Z"/>
+    </g>
+    <rect x="240" y="510" width="240" height="55" rx="12" fill="url(#goldGrad)"/>
+    <text x="360" y="544" text-anchor="middle" font-size="19" font-weight="900" fill="#451a03">PURE COCOA BUTTER</text>
+   </g>
+
+   <!-- Lens 2: Beta-V Crystal Lattice -->
+   <g id="lensCrystal" opacity="0">
+    <text x="360" y="315" text-anchor="middle" font-size="21" font-weight="900" fill="#451a03">CRYSTAL STRUCTURE</text>
+    <rect x="230" y="335" width="260" height="195" rx="18" fill="#451a03"/>
+    <!-- Interlocking Diamond Crystal Lattice -->
+    <g id="crystalShapes" stroke="#fef08a" stroke-width="3">
+     <polygon points="300,365 322,395 300,425 278,395" fill="#facc15"/>
+     <polygon points="360,365 382,395 360,425 338,395" fill="#eab308"/>
+     <polygon points="420,365 442,395 420,425 398,395" fill="#facc15"/>
+     <polygon points="330,425 352,455 330,485 308,455" fill="#eab308"/>
+     <polygon points="390,425 412,455 390,485 368,455" fill="#facc15"/>
+    </g>
+    <text x="360" y="562" text-anchor="middle" font-size="19" font-weight="900" fill="#78350f">BETA-V LATTICE</text>
+   </g>
+  </g>
+  <circle cx="360" cy="430" r="170" fill="none" stroke="#1e293b" stroke-width="8"/>
+  <path d="M485 555 L545 615" stroke="#1e293b" stroke-width="22" stroke-linecap="round"/>
+
+  <g id="tooWarm" opacity="0">
+   <rect x="215" y="618" width="290" height="54" rx="27" fill="#dc2626" stroke="#fff" stroke-width="4"/>
+   <text x="360" y="653" text-anchor="middle" font-size="24" font-weight="900" fill="#fff">TOO WARM · MELTING</text>
+  </g>
+  <g id="snapReady" opacity="0">
+   <rect x="215" y="618" width="290" height="54" rx="27" fill="#16a34a" stroke="#fff" stroke-width="4"/>
+   <text x="360" y="653" text-anchor="middle" font-size="24" font-weight="900" fill="#fff">PERFECT SNAP READY!</text>
+  </g>
+ </g>
+</svg>
+</div>
+
+<script>
+(function(){
+"use strict";
+const NS="http://www.w3.org/2000/svg";
+const cam=document.getElementById("cam");
+const DURATION=50;
+
+// Exact script-aligned stage start times (seconds)
+const TIMELINE=[
+ {t:0,  x:-120, stage:0}, // Intro: raw cocoa beans
+ {t:8.6,x:300,  stage:1}, // First, harvest & ferment (8.79s)
+ {t:16.0,x:900, stage:2}, // Next, dry & roast (16.17s)
+ {t:21.0,x:1500,stage:3}, // Third, crush nibs (21.21s)
+ {t:24.8,x:2100,stage:4}, // Fourth, press it (24.93s)
+ {t:29.4,x:2700,stage:5}, // Fifth, blend milk & sugar (29.55s)
+ {t:32.5,x:3300,stage:6}, // Sixth, giant stone rollers (32.66s)
+ {t:37.0,x:3900,stage:7}, // Seventh, heat & cool (37.13s)
+ {t:41.3,x:4500,stage:8}  // Finally, pour & unwrap (41.43s)
+];
+
+const dashGroup=document.getElementById("dashes");
+for(let i=0;i<8;i++){
+ const r=document.createElementNS(NS,"rect");
+ r.setAttribute("x",208+i*40);r.setAttribute("y",60);r.setAttribute("width",30);r.setAttribute("height",9);r.setAttribute("rx",4.5);r.setAttribute("fill","#78350f");r.setAttribute("id","dash"+i);
+ dashGroup.appendChild(r);
+}
+
+// Create animated product packets along conveyor belt
+const beltItems=document.getElementById("beltItems");
+const packets=[];
+for(let i=0;i<14;i++){
+ const g=document.createElementNS(NS,"g");
+ beltItems.appendChild(g);
+ packets.push(g);
+}
+
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+function smooth(a,b,t){const x=clamp((t-a)/(b-a),0,1);return x*x*(3-2*x);}
+
+function renderAtTime(t,duration,wordTimings){
+ duration=Number(duration)||DURATION;
+ t=clamp(Number(t)||0,0,duration);
+ const scaleT=DURATION/duration;
+ const st=t*scaleT;
+
+ // Determine active stage synced to voice script
+ let idx=0;
+ for(let i=0;i<TIMELINE.length;i++){
+  if(st>=TIMELINE[i].t) idx=i;
+ }
+ const activeStage=TIMELINE[idx].stage;
+ const stageStart=TIMELINE[idx].t;
+ const stageEnd=idx<TIMELINE.length-1?TIMELINE[idx+1].t:46.2;
+ const local=clamp((st-stageStart)/(stageEnd-stageStart),0,1);
+
+ // Camera X position
+ let camX=TIMELINE[idx].x;
+ if(idx<TIMELINE.length-1){
+  const moveStart=stageEnd-1.1;
+  if(st>moveStart){
+   camX=TIMELINE[idx].x+(TIMELINE[idx+1].x-TIMELINE[idx].x)*smooth(moveStart,stageEnd,st);
+  }
+ }
+
+ // Zoom out in last 3.8s to show full factory
+ const zoom=smooth(46.2,50,st);
+ const viewW=720+(5150-720)*zoom;
+ const viewH=viewW*1280/720;
+ const centerX=camX*(1-zoom)+2200*zoom;
+ const viewX=centerX-viewW/2;
+ const viewY=470-viewH*0.42;
+ cam.setAttribute("viewBox",[viewX,viewY,viewW,viewH].join(" "));
+
+ // Machine Blueprint -> Solid Reveal
+ for(let s=1;s<=8;s++){
+  const grp=document.getElementById("s"+s);
+  const bp=grp.querySelector(".bp");
+  const sol=grp.querySelector(".solid");
+  if(s<activeStage){
+   bp.setAttribute("opacity","0");
+   sol.setAttribute("opacity","1");
+  }else if(s===activeStage){
+   const rev=smooth(0,0.32,local);
+   bp.setAttribute("opacity",String(1-rev));
+   sol.setAttribute("opacity",String(rev));
+  }else{
+   bp.setAttribute("opacity",s===activeStage+1?"0.45":"0.15");
+   sol.setAttribute("opacity","0");
+  }
+ }
+
+ // Progress UI
+ const completed=activeStage===0?0:clamp((activeStage-1)+local,0,8);
+ document.getElementById("ring").setAttribute("stroke-dashoffset",String(169.65*(1-completed/8)));
+ for(let i=0;i<8;i++){
+  document.getElementById("dash"+i).setAttribute("fill",i<Math.ceil(completed)?"#facc15":"#78350f");
+ }
+ document.getElementById("stepText").textContent=activeStage+"/8";
+
+ // Continuous Conveyor & Pipe Flow Animations
+ document.getElementById("beltDash").setAttribute("stroke-dashoffset",String(-st*95));
+ document.getElementById("pipeFlow").setAttribute("stroke-dashoffset",String(-st*110));
+ document.getElementById("roastDrum").setAttribute("transform","rotate("+(st*120)+")");
+ document.getElementById("gearL").setAttribute("transform","translate(-45 530) rotate("+(st*160)+")");
+ document.getElementById("gearR").setAttribute("transform","translate(45 530) rotate("+(-st*160)+")");
+ document.getElementById("stoneL").setAttribute("transform","translate(-72 545) rotate("+(st*110)+")");
+ document.getElementById("stoneR").setAttribute("transform","translate(72 545) rotate("+(-st*110)+")");
+ const pistonY=445+Math.sin(st*4)*12;
+ document.getElementById("pistonHead").setAttribute("y",String(pistonY));
+ const bladeW=190*(0.35+0.65*Math.abs(Math.cos(st*5)));
+ document.getElementById("mixerBlade").setAttribute("x",String(-bladeW/2));
+ document.getElementById("mixerBlade").setAttribute("width",String(bladeW));
+
+ // Moving Product Packets on Belt (Purple beans -> Roasted beans -> Cocoa butter -> Finished bars)
+ for(let i=0;i<packets.length;i++){
+  const px=240+((i*315+st*95)%4320);
+  const g=packets[i];
+  g.setAttribute("transform","translate("+px+" 716)");
+  if(px<900){
+   g.innerHTML='<ellipse rx="14" ry="8" fill="#6b21a8" stroke="#3b2314" stroke-width="2.5"/>';
+  }else if(px<1500){
+   g.innerHTML='<ellipse rx="14" ry="8" fill="#451a03" stroke="#1c1917" stroke-width="2.5"/>';
+  }else if(px<3900){
+   g.innerHTML='<rect x="-14" y="-12" width="28" height="16" rx="4" fill="#7c3a1d" stroke="#3b2314" stroke-width="2.5"/>';
+  }else{
+   g.innerHTML='<rect x="-22" y="-13" width="44" height="18" rx="4" fill="#5c2812" stroke="#3b2314" stroke-width="2.5"/><rect x="2" y="-13" width="20" height="18" rx="3" fill="#facc15"/>';
+  }
+ }
+
+ // Magnifying Lens (Stage 4 Press & Stage 7 Tempering)
+ const showLens=(activeStage===4||activeStage===7)&&zoom===0;
+ const lensVis=showLens?(local<0.12?smooth(0,0.12,local):local>0.9?1-smooth(0.9,1,local):1):0;
+ document.getElementById("lens").setAttribute("opacity",String(lensVis));
+ document.getElementById("lensDim").setAttribute("opacity",String(lensVis*0.42));
+ document.getElementById("lensPress").setAttribute("opacity",activeStage===4?"1":"0");
+ document.getElementById("lensCrystal").setAttribute("opacity",activeStage===7?"1":"0");
+
+ // Butter drop motion
+ const dropOff=(st*35)%18;
+ document.getElementById("butterDrops").setAttribute("transform","translate(0 "+dropOff+")");
+
+ // Tempering heat -> snap transition
+ const isWarm=activeStage===7&&local<0.48;
+ document.getElementById("tooWarm").setAttribute("opacity",isWarm?"1":"0");
+ document.getElementById("snapReady").setAttribute("opacity",!isWarm&&activeStage===7?"1":"0");
+ const cScale=isWarm?0.65+Math.sin(st*12)*0.08:1;
+ document.getElementById("crystalShapes").setAttribute("transform","translate(360 425) scale("+cScale+") translate(-360 -425)");
+
+ window.currentWordTimings=wordTimings||[];
+}
+window.renderAtTime=renderAtTime;
+renderAtTime(0,DURATION,[]);
+})();
+</script>
+</body>
+</html>
