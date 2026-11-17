@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Glymphatic Night Shift</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #040819; overflow: hidden; }
+  #scene { display: block; width: 1080px; height: 1920px; }
+</style>
+</head>
+<body>
+<canvas id="scene" width="1080" height="1920"></canvas>
+<script>
+"use strict";
+/* مشهد: "الوردية الليلية للدماغ" — الجهاز الغليمفاوي
+ * 1080×1920 — حركة حتمية بالكامل دالة في t فقط (renderAtTime)
+ * بلا أي نصوص — السرد يظهر عبر طبقة الترجمة الحركية الموحدة في Meko
+ */
+const W = 1080, H = 1920;
+const cvs = document.getElementById("scene");
+const ctx = cvs.getContext("2d");
+const CX = 540, CY = 990;          // مركز الدماغ
+const BS = 620;                    // مقاس الدماغ
+
+/* ---------- أدوات حتمية ---------- */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+function smooth(a, b, v) { const x = clamp01((v - a) / (b - a)); return x * x * (3 - 2 * x); }
+const lerp = (a, b, u) => a + (b - a) * u;
+
+/* ---------- sprites التوهج (تُرسم مرة واحدة) ---------- */
+function makeGlow(r, g, b) {
+  const c = document.createElement("canvas"); c.width = c.height = 128;
+  const g2 = c.getContext("2d");
+  const grd = g2.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grd.addColorStop(0, `rgba(${r},${g},${b},1)`);
+  grd.addColorStop(0.28, `rgba(${r},${g},${b},0.55)`);
+  grd.addColorStop(1, `rgba(${r},${g},${b},0)`);
+  g2.fillStyle = grd; g2.fillRect(0, 0, 128, 128);
+  return c;
+}
+const GLOW = {
+  cyan:   makeGlow(56, 189, 248),
+  ice:    makeGlow(125, 211, 252),
+  violet: makeGlow(167, 139, 250),
+  amber:  makeGlow(245, 158, 11),
+  red:    makeGlow(248, 113, 113),
+  warm:   makeGlow(254, 243, 199),
+  white:  makeGlow(240, 250, 255),
+};
+function glow(img, x, y, size, alpha) {
+  if (alpha <= 0.004) return;
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(img, x - size / 2, y - size / 2, size, size);
+  ctx.globalAlpha = 1;
+}
+
+/* ---------- مسارات الدماغ (منظر جانبي — الوجه للأمام/اليمين) ---------- */
+function cerebrumPath() {
+  const p = new Path2D(), s = BS;
+  p.moveTo(CX + 0.44 * s, CY - 0.02 * s);
+  p.bezierCurveTo(CX + 0.465 * s, CY - 0.11 * s, CX + 0.45 * s, CY - 0.24 * s, CX + 0.34 * s, CY - 0.33 * s);
+  p.bezierCurveTo(CX + 0.22 * s, CY - 0.43 * s, CX + 0.04 * s, CY - 0.475 * s, CX - 0.12 * s, CY - 0.45 * s);
+  p.bezierCurveTo(CX - 0.30 * s, CY - 0.42 * s, CX - 0.44 * s, CY - 0.30 * s, CX - 0.475 * s, CY - 0.13 * s);
+  p.bezierCurveTo(CX - 0.50 * s, CY - 0.01 * s, CX - 0.47 * s, CY + 0.06 * s, CX - 0.40 * s, CY + 0.11 * s);
+  p.bezierCurveTo(CX - 0.33 * s, CY + 0.16 * s, CX - 0.24 * s, CY + 0.17 * s, CX - 0.16 * s, CY + 0.16 * s);
+  p.bezierCurveTo(CX - 0.10 * s, CY + 0.21 * s, CX - 0.02 * s, CY + 0.235 * s, CX + 0.06 * s, CY + 0.235 * s);
+  p.bezierCurveTo(CX + 0.16 * s, CY + 0.27 * s, CX + 0.26 * s, CY + 0.26 * s, CX + 0.33 * s, CY + 0.20 * s);
+  p.bezierCurveTo(CX + 0.40 * s, CY + 0.14 * s, CX + 0.435 * s, CY + 0.05 * s, CX + 0.44 * s, CY - 0.02 * s);
+  p.closePath();
+  return p;
+}
+function cerebellumPath() {
+  const p = new Path2D(), s = BS;
+  const cx0 = CX - 0.255 * s, cy0 = CY + 0.255 * s;
+  const k = 0.92;
+  p.moveTo(cx0 - 0.115 * k * s, cy0 - 0.02 * k * s);
+  p.bezierCurveTo(cx0 - 0.13 * k * s, cy0 + 0.075 * k * s, cx0 - 0.06 * k * s, cy0 + 0.135 * k * s, cx0 + 0.02 * k * s, cy0 + 0.13 * k * s);
+  p.bezierCurveTo(cx0 + 0.10 * k * s, cy0 + 0.125 * k * s, cx0 + 0.145 * k * s, cy0 + 0.06 * k * s, cx0 + 0.13 * k * s, cy0 - 0.01 * k * s);
+  p.bezierCurveTo(cx0 + 0.115 * k * s, cy0 - 0.07 * k * s, cx0 + 0.03 * k * s, cy0 - 0.105 * k * s, cx0 - 0.045 * k * s, cy0 - 0.09 * k * s);
+  p.bezierCurveTo(cx0 - 0.10 * k * s, cy0 - 0.078 * k * s, cx0 - 0.108 * k * s, cy0 - 0.06 * k * s, cx0 - 0.115 * k * s, cy0 - 0.02 * k * s);
+  p.closePath();
+  return p;
+}
+function stemPath() {
+  const p = new Path2D(), s = BS;
+  p.moveTo(CX - 0.015 * s, CY + 0.225 * s);
+  p.bezierCurveTo(CX + 0.01 * s, CY + 0.27 * s, CX + 0.005 * s, CY + 0.31 * s, CX - 0.02 * s, CY + 0.355 * s);
+  p.lineTo(CX + 0.045 * s, CY + 0.365 * s);
+  p.bezierCurveTo(CX + 0.075 * s, CY + 0.315 * s, CX + 0.08 * s, CY + 0.265 * s, CX + 0.075 * s, CY + 0.215 * s);
+  p.closePath();
+  return p;
+}
+const BRAIN_C = cerebrumPath();
+const BRAIN_CB = cerebellumPath();
+const BRAIN_STEM = stemPath();
+function brainUnionPath() {
+  const p = new Path2D();
+  p.addPath(BRAIN_C); p.addPath(BRAIN_CB); p.addPath(BRAIN_STEM);
+  return p;
+}
+const BRAIN_ALL = brainUnionPath();
+
+/* ---------- منحنيات Catmull-Rom → عينات متساوية القوس ---------- */
+function catmullRom(pts, samples) {
+  const P = [pts[0]].concat(pts, [pts[pts.length - 1]]);
+  const raw = [];
+  for (let i = 1; i < P.length - 2; i++) {
+    const p0 = P[i - 1], p1 = P[i], p2 = P[i + 1], p3 = P[i + 2];
+    const seg = Math.max(8, Math.round(samples / (P.length - 3)));
+    for (let j = 0; j < seg; j++) {
+      const u = j / seg, u2 = u * u, u3 = u2 * u;
+      raw.push({
+        x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * u + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * u2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * u3),
+        y: 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * u + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * u2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * u3),
+      });
+    }
+  }
+  raw.push({ x: pts[pts.length - 1].x, y: pts[pts.length - 1].y });
+  let total = 0; const d = [0];
+  for (let i = 1; i < raw.length; i++) {
+    total += Math.hypot(raw[i].x - raw[i - 1].x, raw[i].y - raw[i - 1].y);
+    d.push(total);
+  }
+  const out = []; let k = 0;
+  for (let i = 0; i < samples; i++) {
+    const target = (i / (samples - 1)) * total;
+    while (k < d.length - 2 && d[k + 1] < target) k++;
+    const seg2 = d[k + 1] - d[k] || 1;
+    const u = (target - d[k]) / seg2;
+    out.push({ x: lerp(raw[k].x, raw[k + 1].x, u), y: lerp(raw[k].y, raw[k + 1].y, u) });
+  }
+  return out;
+}
+
+/* ---------- بنية المشهد (تُبنى مرة واحدة) ---------- */
+const rng = mulberry32(20261117);
+function ptInBrain(x, y) { return ctx.isPointInPath(BRAIN_ALL, x, y); }
+
+/* قوارير السائل الدماغي الشوكي — تلتف داخل الدماغ (تُقص عند الرسم) */
+const VESSELS = [
+  catmullRom([{x:-40,y:250},{x:-200,y:80},{x:-60,y:-30},{x:-190,y:-140},{x:30,y:-180},{x:170,y:-50},{x:50,y:80},{x:180,y:170}].map(p=>({x:CX+p.x*1.05, y:CY+p.y*0.92})), 240),
+  catmullRom([{x:10,y:260},{x:130,y:120},{x:-70,y:15},{x:90,y:-115},{x:-140,y:-165},{x:-50,y:-40},{x:120,y:55},{x:-20,y:170}].map(p=>({x:CX+p.x*1.05, y:CY+p.y*0.92})), 240),
+  catmullRom([{x:-150,y:230},{x:20,y:85},{x:170,y:-5},{x:60,y:-155},{x:-120,y:-115},{x:-30,y:15},{x:-160,y:120}].map(p=>({x:CX+p.x*1.05, y:CY+p.y*0.92})), 240),
+  catmullRom([{x:70,y:250},{x:-110,y:150},{x:150,y:55},{x:-40,y:-65},{x:150,y:-145},{x:-90,y:-75},{x:-170,y:40},{x:10,y:130}].map(p=>({x:CX+p.x*1.05, y:CY+p.y*0.92})), 240),
+];
+
+/* جزيئات التدفق المستمر */
+const FLOW = [];
+VESSELS.forEach((pts, vi) => {
+  const n = 25;
+  for (let i = 0; i < n; i++) {
+    FLOW.push({
+      v: vi,
+      off: (i / n + rng() * 0.02) % 1,
+      speed: 0.055 + rng() * 0.035,
+      size: 9 + rng() * 15,
+      img: rng() < 0.6 ? GLOW.cyan : GLOW.ice,
+      ph: rng() * Math.PI * 2,
+    });
+  }
+});
+
+/* عقد الشبكة العصبية داخل الدماغ */
+const NODES = [];
+{
+  let guard = 0;
+  while (NODES.length < 40 && guard++ < 1200) {
+    const x = CX + (rng() * 2 - 1) * BS * 0.47;
+    const y = CY + (rng() * 2 - 1) * BS * 0.44;
+    if (!ptInBrain(x, y)) continue;
+    let ok = true;
+    for (const n of NODES) if (Math.hypot(n.x - x, n.y - y) < BS * 0.115) { ok = false; break; }
+    if (ok) NODES.push({ x, y, ph: rng() * Math.PI * 2 });
+  }
+}
+const EDGES = [];
+NODES.forEach((n, i) => {
+  const near = NODES.map((m, j) => ({ j, d: Math.hypot(n.x - m.x, n.y - m.y) }))
+    .filter(o => o.j !== i).sort((a, b) => a.d - b.d).slice(0, 2);
+  near.forEach(o => {
+    const key = Math.min(i, o.j) + "-" + Math.max(i, o.j);
+    if (!EDGES.some(e => e.key === key)) EDGES.push({ a: i, b: o.j, key, ph: rng() * Math.PI * 2, sp: 0.22 + rng() * 0.28 });
+  });
+});
+
+/* الأثلام (gyri) — خطوط متموجة قصيرة داخل الدماغ */
+const GYRI = [];
+{
+  let guard = 0;
+  while (GYRI.length < 16 && guard++ < 500) {
+    let x = CX + (rng() * 2 - 1) * BS * 0.42, y = CY + (rng() * 2 - 1) * BS * 0.40;
+    if (!ptInBrain(x, y)) continue;
+    const segs = []; let ang = rng() * Math.PI * 2;
+    const len = 4 + Math.floor(rng() * 4); const sx = x, sy = y;
+    let valid = true;
+    for (let s2 = 0; s2 < len; s2++) {
+      ang += (rng() * 2 - 1) * 0.9;
+      const step = 28 + rng() * 28;
+      const nx = x + Math.cos(ang) * step, ny = y + Math.sin(ang) * step * 0.7;
+      if (!ptInBrain(nx, ny)) { valid = false; break; }
+      segs.push({ x: nx, y: ny }); x = nx; y = ny;
+    }
+    if (valid) GYRI.push({ x0: { x: sx, y: sy }, pts: segs });
+  }
+}
+
+/* النجوم */
+const STARS = [];
+for (let i = 0; i < 95; i++) {
+  STARS.push({
+    x: rng() * W, y: rng() * H * 0.62,
+    r: 0.8 + rng() * 1.8, ph: rng() * Math.PI * 2, sp: 0.5 + rng() * 1.2,
+    img: rng() < 0.25 ? GLOW.ice : GLOW.white,
+  });
+}
+
+/* السموم — تُغسل تدريجيًا عبر القوارير */
+const TOXINS = [];
+{
+  const rT = mulberry32(777);
+  let guard = 0;
+  while (TOXINS.length < 32 && guard++ < 1200) {
+    const x = CX + (rT() * 2 - 1) * BS * 0.45;
+    const y = CY + (rT() * 2 - 1) * BS * 0.42;
+    if (!ptInBrain(x, y)) continue;
+    let ok = true;
+    for (const o of TOXINS) if (Math.hypot(o.x - x, o.y - y) < BS * 0.09) { ok = false; break; }
+    if (!ok) continue;
+    const vi = TOXINS.length % 4;
+    const pts = VESSELS[vi];
+    let best = 0, bd = 1e9;
+    for (let k = 0; k < pts.length; k++) {
+      const d = Math.hypot(pts[k].x - x, pts[k].y - y);
+      if (d < bd) { bd = d; best = k; }
+    }
+    TOXINS.push({
+      x, y, v: vi, u0: best / (pts.length - 1),
+      rel: 0.50 + (TOXINS.length / 32) * 0.24 + rT() * 0.015,
+      size: 6.5 + rT() * 5.5, ph: rT() * Math.PI * 2,
+      img: rT() < 0.5 ? GLOW.amber : GLOW.red,
+    });
+  }
+}
+
+/* موجة النوم العميق (EEG بطيء) */
+function drawEEG(t, alpha) {
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.strokeStyle = `rgba(56,189,248,${alpha})`;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  for (let x = 110; x <= W - 110; x += 6) {
+    const y = 655
+      + Math.sin(x * 0.011 + t * 1.45) * 15
+      + Math.sin(x * 0.023 - t * 0.9) * 6 * (0.6 + 0.4 * Math.sin(t * 0.4));
+    if (x === 110) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* رسم المشهد في اللحظة t */
+window.renderAtTime = function (t, duration, wordTimings) {
+  const D = duration || 20;
+  const f = clamp01(t / D);
+
+  /* الخلفية */
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, "#030715");
+  bg.addColorStop(0.45, "#07102b");
+  bg.addColorStop(1, "#040a1e");
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  /* نجوم متلألئة */
+  ctx.globalCompositeOperation = "lighter";
+  for (const s of STARS) {
+    const tw = 0.35 + 0.65 * Math.abs(Math.sin(t * s.sp + s.ph));
+    glow(s.img, s.x, s.y, s.r * 7, tw * 0.7);
+    ctx.fillStyle = "#e8f4ff";
+    ctx.globalAlpha = tw;
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r * 0.5, 0, 7); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  /* القمر — هلال نظيف (القص داخل دائرة القمر) */
+  const moonIn = smooth(0.2, 1.6, t);
+  const my = 305 + Math.sin(t * 0.7) * 10;
+  glow(GLOW.warm, 540, my, 480 * (0.9 + 0.1 * Math.sin(t * 0.8)), 0.42 * moonIn);
+  ctx.globalCompositeOperation = "source-over";
+  ctx.save();
+  ctx.beginPath(); ctx.arc(540, my, 92, 0, 7); ctx.clip();
+  ctx.fillStyle = `rgba(250,240,214,${0.97 * moonIn})`;
+  ctx.fillRect(440, my - 100, 200, 200);
+  ctx.fillStyle = `rgba(6,11,30,${0.97 * moonIn})`;
+  ctx.beginPath(); ctx.arc(573, my - 24, 84, 0, 7); ctx.fill();
+  ctx.restore();
+
+  drawEEG(t, 0.20 * smooth(1.5, 3.5, t) * (0.85 + 0.15 * Math.sin(t * 0.5)));
+
+  /* سديم متوهج خلف الدماغ — يتنفس */
+  const breathe = 1 + Math.sin(t * 0.55) * 0.06;
+  ctx.globalCompositeOperation = "lighter";
+  glow(GLOW.cyan, CX, CY, 900 * breathe, 0.30 * smooth(0.8, 2.6, t));
+  glow(GLOW.violet, CX - 140, CY - 70, 560 * breathe, 0.22 * smooth(1.2, 3.0, t));
+
+  /* الدماغ */
+  const fillP = smooth(0.10, 0.24, f);
+  const scale = lerp(0.90, 1, smooth(0.02, 0.18, f)) * (1 + Math.sin(t * 0.85) * 0.012);
+  ctx.globalCompositeOperation = "source-over";
+  ctx.save();
+  ctx.translate(CX, CY); ctx.scale(scale, scale); ctx.translate(-CX, -CY);
+
+  ctx.fillStyle = `rgba(12,24,52,${0.92 * fillP})`;
+  // المخيخ وجذع الدماغ خلف المخ الرئيسي كي يبدوا مدسوسين تحته
+  ctx.fill(BRAIN_CB);
+  ctx.fill(BRAIN_STEM);
+  ctx.fill(BRAIN_C);
+
+  /* كل العناصر الداخلية مقصوصة داخل جسم الدماغ */
+  ctx.save();
+  ctx.clip(BRAIN_ALL);
+
+  /* الأثلام */
+  const gyP = smooth(0.13, 0.26, f);
+  if (gyP > 0) {
+    ctx.strokeStyle = `rgba(125,211,252,${0.22 * gyP})`;
+    ctx.lineWidth = 4; ctx.lineCap = "round";
+    for (const g of GYRI) {
+      ctx.beginPath();
+      ctx.moveTo(g.x0.x, g.x0.y);
+      for (const p2 of g.pts) ctx.quadraticCurveTo((g.x0.x + p2.x) / 2, (g.x0.y + p2.y) / 2 - 8, p2.x, p2.y);
+      ctx.stroke();
+    }
+  }
+
+  /* القوارير — تتوهج مع بدء التدفق */
+  const flowP = smooth(0.36, 0.50, f);
+  if (flowP > 0) {
+    ctx.globalCompositeOperation = "lighter";
+    ctx.strokeStyle = `rgba(34,211,238,${0.28 * flowP})`;
+    ctx.lineWidth = 3;
+    for (const pts of VESSELS) {
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i += 4) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.stroke();
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  /* الشبكة العصبية — تُضاء تدريجيًا مع نبضات تسافر */
+  const netP = smooth(0.22, 0.40, f);
+  if (netP > 0) {
+    const lit = Math.floor(netP * EDGES.length);
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineWidth = 1.8;
+    for (let i = 0; i < lit; i++) {
+      const e = EDGES[i], a = NODES[e.a], b = NODES[e.b];
+      ctx.strokeStyle = `rgba(56,189,248,${0.13 + 0.08 * Math.sin(t * 1.3 + e.ph)})`;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      const u = (t * e.sp + e.ph) % 1;
+      glow(GLOW.ice, lerp(a.x, b.x, u), lerp(a.y, b.y, u), 14, 0.7);
+    }
+    for (const n of NODES) {
+      const pp = 0.6 + 0.4 * Math.sin(t * 2.1 + n.ph);
+      glow(GLOW.cyan, n.x, n.y, 11, 0.45 * pp);
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  /* جزيئات التدفق المستمرة */
+  if (flowP > 0) {
+    ctx.globalCompositeOperation = "lighter";
+    const spd = flowP;
+    for (const p of FLOW) {
+      const u = (p.off + t * p.speed * spd) % 1;
+      const pts = VESSELS[p.v];
+      const idx = u * (pts.length - 1);
+      const i0 = Math.floor(idx), i1 = Math.min(pts.length - 1, i0 + 1);
+      const fu = idx - i0;
+      const x = lerp(pts[i0].x, pts[i1].x, fu);
+      const y = lerp(pts[i0].y, pts[i1].y, fu);
+      const fade = smooth(0, 0.06, u) * (1 - smooth(0.94, 1, u));
+      const a = fade * flowP * (0.55 + 0.45 * Math.sin(t * 2.2 + p.ph));
+      glow(p.img, x, y, p.size * 3.0, a * 0.8);
+      glow(p.img, x, y, p.size * 1.1, a);
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  /* السموم — تهتز ثم تُغسل عبر القوارير وتتلاشى */
+  ctx.globalCompositeOperation = "lighter";
+  for (const tx of TOXINS) {
+    const rel = tx.rel;
+    if (f < rel - 0.015) {
+      const vis = smooth(0.46, 0.52, f) * (0.55 + 0.2 * Math.sin(t * 3 + tx.ph));
+      glow(tx.img, tx.x + Math.sin(t * 1.7 + tx.ph) * 4, tx.y + Math.cos(t * 1.3 + tx.ph) * 4, tx.size * 2.6, vis);
+    } else {
+      const u = clamp01((f - rel) / 0.30);
+      if (u >= 1) continue;
+      const pts = VESSELS[tx.v];
+      const uu = lerp(tx.u0, 1, Math.pow(u, 0.8));
+      const idx = uu * (pts.length - 1);
+      const i0 = Math.floor(idx), i1 = Math.min(pts.length - 1, i0 + 1);
+      const fu = idx - i0;
+      const x = lerp(pts[i0].x, pts[i1].x, fu);
+      const y = lerp(pts[i0].y, pts[i1].y, fu);
+      const a = (1 - smooth(0.55, 1, u)) * 0.9;
+      glow(tx.img, x, y, tx.size * 2.4, a);
+    }
+  }
+  ctx.globalCompositeOperation = "source-over";
+  ctx.restore(); // نهاية clip الدماغ
+
+  /* حواف الدماغ النيونية — تزداد إشراقًا في الختام */
+  const finale = smooth(0.80, 0.97, f);
+  ctx.save();
+  ctx.globalCompositeOperation = "source-over";
+  ctx.shadowColor = "#38bdf8";
+  ctx.shadowBlur = 24 + 18 * finale;
+  // الحواف الخلفية أولًا ثم حافة المخ الرئيسي فوقها
+  ctx.strokeStyle = `rgba(96,165,250,${0.75 * fillP})`;
+  ctx.lineWidth = 4.5;
+  ctx.stroke(BRAIN_CB);
+  ctx.stroke(BRAIN_STEM);
+  ctx.strokeStyle = `rgba(125,211,252,${0.9 * fillP})`;
+  ctx.lineWidth = 5.5;
+  ctx.stroke(BRAIN_C);
+  ctx.restore();
+  glow(GLOW.cyan, CX, CY, BS * 1.7 * (1 + finale * 0.25), (0.12 + 0.30 * finale) * fillP);
+
+  ctx.restore(); // نهاية تحجيم الدماغ
+
+  /* حلقات الختام — تتمدد من الدماغ */
+  if (finale > 0) {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (let r = 0; r < 2; r++) {
+      const u = clamp01((f - 0.82 - r * 0.10) / 0.16);
+      if (u <= 0 || u >= 1) continue;
+      ctx.strokeStyle = r === 0 ? `rgba(56,189,248,${0.5 * (1 - u)})` : `rgba(167,139,250,${0.4 * (1 - u)})`;
+      ctx.lineWidth = 4 - 2 * u;
+      ctx.beginPath();
+      ctx.arc(CX, CY - 30, 200 + u * (r === 0 ? 480 : 620), 0, 7);
+      ctx.stroke();
+    }
+    glow(GLOW.white, CX, CY, 300 * finale, 0.22 * finale);
+    ctx.restore();
+  }
+
+  /* دخول ناعم من الأسود */
+  const fadeIn = 1 - smooth(0, 1.4, t);
+  if (fadeIn > 0) {
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = `rgba(2,4,12,${fadeIn})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+};
+
+/* رسم أولي */
+window.renderAtTime(0, 20, null);
+</script>
+</body>
+</html>
