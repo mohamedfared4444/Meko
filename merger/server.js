@@ -34,6 +34,7 @@ const videocutHandler = require("./api/videocut");
 const codevideoHandler = require("./api/codevideo");
 const renderPayloadHandler = require("./api/render-payload");
 const renderCompleteHandler = require("./api/render-complete");
+const metaHandler = require("./api/meta");
 
 const PORT = Number(process.env.PORT || 8787);
 
@@ -87,6 +88,7 @@ const server = http.createServer((req, res) => {
   // (النقطة نفسها تفحص الطريقة وop داخليًا، فالتوجيه هنا موحّد لكل الطرق)
   if (pathname === "/api/render-payload") return wrap(renderPayloadHandler)(req, res);
   if (pathname === "/api/render-complete") return wrap(renderCompleteHandler)(req, res);
+  if (pathname === "/api/meta") return wrap(metaHandler)(req, res);
 
   // الملفات الثابتة — الواجهة العربية
   if (pathname === "/" || pathname === "/index.html") {
